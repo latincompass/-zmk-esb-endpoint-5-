@@ -1,0 +1,3 @@
+add_subdirectory_ifdef(CONFIG_ZMK_ESB_ENDPOINT esb)
+add_subdirectory_ifdef(CONFIG_ZMK_ESB_ENDPOINT_SHELL_RELAY shell)
+add_subdirectory_ifdef(CONFIG_ZMK_ESB_ENDPOINT behaviors)

@@ -1,0 +1,16 @@
+# SPDX-License-Identifier: MIT
+* text=auto
+*.c text
+*.h text
+*.dtsi text
+*.yaml text
+*.conf text
+*.keymap text
+*.dts text
+*.cmake text
+*.txt text
+*.md text
+*.yml text
+*.toml text
+*.png binary
+*.jpg binary

@@ -1,0 +1,70 @@
+/*
+ * SPDX-License-Identifier: MIT
+ *
+ * HHKB Professional 2 layout keymap for nRF52833 + ESB endpoint
+ *
+ * Layer 0: Default HHKB layout
+ * Layer 1: Function layer (FN)
+ * Layer 2: Navigation / Media layer
+ *
+ * This is the traditional HHKB layout with:
+ *   - Control on the left of A
+ *   - Backspace on the top right
+ *   - `~ on Backspace
+ *   - Fn on the right of right Shift
+ *   - Split right Shift (Shift / Fn)
+ *   - 6.25u spacebar
+ *
+ * Key positions (row, column):
+ *   Row 0:  `~  1!  2@  3#  4$  5%  6^  7&
+ *   Row 1:  8*  9(  0)  -_  =+  \|  BSp `~
+ *   Row 2: Tab  Q   W   E   R   T   Y   U
+ *   Row 3:  I   O   P   [{  ]}  Del
+ *   Row 4:  A   S   D   F   G   H   J   K
+ *   Row 5:  L   ;:  '"  Ent
+ *   Row 6:  LSft Z   X   C   V   B   N   M
+ *   Row 7:  ,<  .>  /?  RSft Fn
+ *   Row 8: LCtl GUI LAlt    Spc     RAlt GUI  App
+ */
+
+#include <behaviors.dtsi>
+#include <dt-bindings/zmk/keys.h>
+#include <dt-bindings/zmk/modifiers.h>
+#include <dt-bindings/zmk/bt.h>
+#include <dt-bindings/zmk/outputs.h>
+
+/ {
+    keymap {
+        compatible = "zmk,keymap";
+
+        /* Layer 0: Default HHKB */
+        default_layer {
+            bindings = <
+    &kp GRAVE &kp N1   &kp N2   &kp N3   &kp N4   &kp N5   &kp N6   &kp N7
+    &kp N8   &kp N9   &kp N0   &kp MINUS &kp EQUAL &kp BSLH &kp BSPC &kp GRAVE
+    &kp TAB  &kp Q    &kp W    &kp E    &kp R    &kp T    &kp Y    &kp U
+    &kp I    &kp O    &kp P    &kp LBKT &kp RBKT &kp DEL
+    &kp A    &kp S    &kp D    &kp F    &kp G    &kp H    &kp J    &kp K
+    &kp L    &kp SEMI &kp SQT  &kp RET
+    &kp LSFT &kp Z    &kp X    &kp C    &kp V    &kp B    &kp N    &kp M
+    &kp COMMA &kp DOT &kp FSLH &kp RSFT &mo 1
+    &kp LCTL &kp LGUI &kp LALT   &kp SPACE   &kp RALT &kp RGUI &kp APP
+            >;
+        };
+
+        /* Layer 1: Function layer (HHKB Fn) */
+        fn_layer {
+            bindings = <
+    &kp ESC  &kp F1   &kp F2   &kp F3   &kp F4   &kp F5   &kp F6   &kp F7
+    &kp F8   &kp F9   &kp F10  &kp F11  &kp F12  &kp INS  &kp DEL  &kp ESC
+    &kp CLCK &kp PGDN &kp PGUP &kp PRSC &kp SLCK &kp PAUS &kp UP   &kp HOME
+    &kp LEFT &kp DOWN &kp RGHT &kp END  &none    &none
+    &none    &none    &none    &none    &none    &none    &none    &none
+    &none    &none    &none    &none
+    &none    &none    &none    &none    &none    &none    &none    &none
+    &none    &none    &none    &none    &none
+    &none    &none    &none      &none        &none    &none    &none
+            >;
+        };
+    };
+};

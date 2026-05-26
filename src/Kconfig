@@ -1,0 +1,850 @@
+config ZMK_ESB_ENDPOINT
+    bool "ESB endpoint on last BLE profile slot"
+    depends on ZMK_BLE
+    select NRFX_PPI if HAS_HW_NRF_PPI
+    select NRFX_DPPI if HAS_HW_NRF_DPPIC
+    select NRFX_TIMER2
+    select DYNAMIC_INTERRUPTS
+    select DYNAMIC_DIRECT_INTERRUPTS
+    select SETTINGS
+    help
+      Repurposes the last BLE profile slot as an ESB PTX endpoint.
+      ESB sources live at vendor/nrf-esb (copied from NCS v3.0.2).
+      nrfxlib MPSL is a git submodule at vendor/nrfxlib — run
+      `git submodule update --init --recursive` if missing.
+
+if ZMK_ESB_ENDPOINT
+
+config ZMK_ESB_ENDPOINT_LOG_LEVEL
+    int "Log level for the zmk-esb-endpoint module"
+    default 2
+    range 0 4
+    help
+      Compile-time log level for every TU in this module
+      (0=OFF, 1=ERR, 2=WRN, 3=INF, 4=DBG). Independent of
+      CONFIG_ZMK_LOG_LEVEL so a developer keeping ZMK at INFO does
+      not pay the flash cost of every ESB DBG/INF format string.
+      Default 2 (WRN) keeps the field-debuggable warnings/errors and
+      drops ~1.4–1.6 KB of DBG/INF strings.
+
+config ZMK_ESB_ENDPOINT_SHELL_CMDS
+    bool "Register `esb` shell commands (unpair, channel, bench)"
+    depends on SHELL
+    default y
+    help
+      Registers the `esb` root shell command set. Disable on tight
+      ROM budgets — the equivalent functionality is also reachable
+      via the keymap behaviors (`&esb_unpair`) and the optional
+      benchmark/channel-hop diagnostics are not strictly needed
+      in production.
+
+config ZMK_ESB_ENDPOINT_ADAPTIVE_RETRY
+    bool "Adapt ESB retransmit_count from observed link quality"
+    depends on ZMK_ESB_ENDPOINT_CHANNEL_HOP
+    default y
+    help
+      Periodically retunes the ESB retransmit_count based on the EWMA
+      of TX attempts: lower on a clean link (lower tail latency),
+      higher on a degraded one (better survival). Disabling locks
+      retransmit_count at the Kconfig default for the lifetime of the
+      slot. Saves ~150–200 B of flash.
+
+config ZMK_ESB_ENDPOINT_ADAPTIVE_RETRY_INTERVAL_MS
+    int "Adaptive retry: re-evaluation interval (ms)"
+    depends on ZMK_ESB_ENDPOINT_ADAPTIVE_RETRY
+    default 35
+    range 10 5000
+    help
+      Cadence at which the adaptive-retry worker recomputes the target
+      retransmit_count from the link-quality EWMA. Lower values react
+      faster to link changes; higher values reduce workqueue churn.
+
+config ZMK_ESB_ENDPOINT_ADAPTIVE_RETRY_EWMA_LOW
+    int "Adaptive retry: lower EWMA breakpoint (attempts × 10)"
+    depends on ZMK_ESB_ENDPOINT_ADAPTIVE_RETRY
+    default 15
+    range 10 100
+    help
+      Below this EWMA value (in tx_attempts × 10) the link is treated as
+      near-perfect — mostly 1-attempt packets — and retransmit_count is
+      pinned at COUNT_MIN.
+
+config ZMK_ESB_ENDPOINT_ADAPTIVE_RETRY_EWMA_HIGH
+    int "Adaptive retry: upper EWMA breakpoint (attempts × 10)"
+    depends on ZMK_ESB_ENDPOINT_ADAPTIVE_RETRY
+    default 45
+    range 11 200
+    help
+      At or above this EWMA value (in tx_attempts × 10) the link is
+      treated as degraded and retransmit_count is pinned at COUNT_MAX.
+      Between LOW and HIGH the count is linearly interpolated, rounded
+      toward COUNT_MIN. Must be greater than EWMA_LOW.
+
+config ZMK_ESB_ENDPOINT_ADAPTIVE_RETRY_COUNT_MIN
+    int "Adaptive retry: minimum retransmit_count on a clean link"
+    depends on ZMK_ESB_ENDPOINT_ADAPTIVE_RETRY
+    default 2
+    range 0 15
+    help
+      Floor for the adaptive retransmit_count. Applied when the EWMA is
+      at or below ADAPTIVE_RETRY_EWMA_LOW.
+
+config ZMK_ESB_ENDPOINT_ADAPTIVE_RETRY_COUNT_MAX
+    int "Adaptive retry: maximum retransmit_count on a degraded link"
+    depends on ZMK_ESB_ENDPOINT_ADAPTIVE_RETRY
+    default 12
+    range 0 15
+    help
+      Ceiling for the adaptive retransmit_count. Applied when the EWMA
+      is at or above ADAPTIVE_RETRY_EWMA_HIGH. Must be ≥ COUNT_MIN.
+
+config ZMK_ESB_ENDPOINT_COOP_HOP
+    bool "Cooperative-hop handshake (HOP_OFFER / HOP_ACCEPT)"
+    depends on ZMK_ESB_ENDPOINT_CHANNEL_HOP
+    default y
+    help
+      Adds a synchronised channel-hop path that fires earlier than
+      the dead-link / weak-link triggers, in the moderately-degraded
+      zone where retransmits are climbing but most packets still get
+      through. Both sides flip the radio at a co-ordinated deadline
+      to minimise the blackout window. Disabling falls back to the
+      existing TX-fail-driven and weak-link triggers — coverage
+      remains, but coordinated hops on a degraded-but-not-dead link
+      no longer happen. Saves ~1.0–1.2 KB of flash.
+
+config ZMK_ESB_ENDPOINT_RENDEZVOUS
+    bool "Rendezvous side-trip + cooldown fallback"
+    depends on ZMK_ESB_ENDPOINT_CHANNEL_HOP
+    default y
+    help
+      Two recovery paths that re-acquire a desynced dongle by
+      reaching the DTS-default rendezvous channel:
+      (1) periodic side-trip during the post-hop PROPOSAL burst that
+          briefly hops to the rendezvous channel and tells the
+          dongle where the keyboard actually is, and
+      (2) cooldown fallback that force-hops to the rendezvous
+          channel after RENDEZVOUS_FALLBACK_MS of post-hop silence.
+      Disabling drops `esb_transport_send_blocking`, the
+      synchronous TX state, and both fallback paths — recovery from
+      a missed hop then relies entirely on the dongle's own rollback
+      dwell cycle. Saves ~550 B of flash.
+
+# BT_LL_SW_SPLIT compile-time reserves PPI channels 6-19, leaving only 0-5
+# for application use. ESB needs all 6 of those. Force UART0 to use
+# interrupt-driven TX so it does not claim channel 5 at boot.
+config UART_0_ENHANCED_POLL_OUT
+    default n
+
+# ---- ESB Kconfig (mirrors nrf/subsys/esb/Kconfig for compilation) ----
+
+config ESB
+    bool "Enhanced ShockBurst"
+    default y if ZMK_ESB_ENDPOINT
+
+if ESB
+
+config ESB_MAX_PAYLOAD_LENGTH
+    int "Maximum ESB payload size"
+    default 32
+    range 1 32
+
+config ESB_TX_FIFO_SIZE
+    int "ESB TX FIFO depth"
+    default 32 if ZMK_ESB_ENDPOINT_SHELL_RELAY
+    default 8
+
+config ESB_RX_FIFO_SIZE
+    int "ESB RX FIFO depth"
+    default 24 if ZMK_ESB_ENDPOINT_SHELL_RELAY
+    default 8
+
+config ESB_PIPE_COUNT
+    int "ESB pipe count"
+    default 2
+    range 1 8
+
+config ESB_RADIO_IRQ_PRIORITY
+    int "ESB radio interrupt priority"
+    default 1
+
+config ESB_EVENT_IRQ_PRIORITY
+    int "ESB event interrupt priority"
+    default 2
+
+config ESB_SYS_TIMER2
+    bool
+    default y
+
+config ESB_SYS_TIMER_INSTANCE
+    int
+    default 2
+
+config ESB_SYS_TIMER_INSTANCE_LEADING_ZERO
+    bool
+    default n
+
+config ESB_DYNAMIC_INTERRUPTS
+    bool "ESB dynamic interrupt support"
+    default y if ZMK_ESB_ENDPOINT
+
+config ESB_NEVER_DISABLE_TX
+    bool
+    default y
+
+config ESB_FAST_SWITCHING
+    bool
+    default n
+
+config ESB_FAST_CHANNEL_SWITCHING
+    bool
+    default n
+
+module=ESB
+module-str=ESB
+source "${ZEPHYR_BASE}/subsys/logging/Kconfig.template.log_config"
+
+endif # ESB
+
+# ---- Module options ----
+
+config ZMK_ESB_ENDPOINT_HID_NOACK
+    bool "Send mouse HID reports without ACK (fire-and-forget)"
+    default n
+    help
+      When enabled, mouse HID report payloads on pipe 1 are sent with
+      noack=1, skipping the ESB ACK wait and retransmit window for lowest
+      pointer/scroll latency. Pointer motion is a self-correcting stream so
+      occasional drops are tolerable. Keyboard and consumer reports always
+      use ACKs regardless of this option — they are edge-triggered state
+      updates and a lost release packet strands the key on the host.
+      Requires selective_auto_ack (enabled unconditionally in transport cfg).
+      Control packets (BEACON/PAIR/DISCONNECT) always use ACKs so the dongle
+      can piggyback responses.
+
+config ZMK_ESB_ENDPOINT_RETRANSMIT_COUNT
+    int "ESB retransmit count for ACKed packets"
+    default 5
+    range 0 15
+    help
+      Applies to control packets (BEACON/PAIR/DISCONNECT). HID reports sent
+      with noack=1 (see ZMK_ESB_ENDPOINT_HID_NOACK) are not retransmitted
+      regardless of this value.
+
+config ZMK_ESB_ENDPOINT_RETRANSMIT_DELAY_US
+    int "ESB retransmit delay (microseconds)"
+    default 570
+
+config ZMK_ESB_ENDPOINT_POINTER_RETRANSMIT_COUNT
+    int "ESB retransmit count for pointer/scroll-only mouse reports"
+    default 2
+    range 0 15
+    help
+      Mouse reports that carry pointer or scroll motion but no button
+      bits use this lower retransmit count instead of RETRANSMIT_COUNT.
+      Motion is self-correcting: when a TX exhausts retries the deltas
+      are added (saturating to int16) to the next outgoing mouse report
+      instead of staying queued in ESB's TX FIFO, so excessive retries
+      only add tail latency. Mouse reports that include any button bit
+      fall back to the global RETRANSMIT_COUNT — buttons are edge-
+      triggered and cannot be reconstructed by accumulation.
+
+      Has no effect when ZMK_ESB_ENDPOINT_HID_NOACK is enabled (mouse
+      reports are then sent with noack=1 regardless of this value).
+
+config ZMK_ESB_ENDPOINT_POINTER_MOTION_RING_SIZE
+    int "Per-send motion record ring depth (pointer/scroll refund)"
+    default 24
+    range 2 64
+    help
+      Capacity of the parallel ring that stores each recent mouse-report
+      send's motion deltas, popped one slot per TX event so a TX_FAILED
+      can be matched back to the deltas that need refunding into the
+      next outgoing mouse report. Should comfortably exceed the typical
+      number of in-flight mouse packets in ESB's TX FIFO; sized like
+      the existing critical-override / noack rings so flush-induced
+      drift is bounded the same way.
+
+config ZMK_ESB_ENDPOINT_POINTER_REFUND_STALE_MS
+    int "Drop accumulated pointer-refund deltas older than this (ms)"
+    default 100
+    range 1 5000
+    help
+      Maximum age of pending pointer/scroll refund deltas before they
+      are dropped instead of being added to the next outgoing mouse
+      report. Mirrors MOTION_MAX_STALE_MS for the input processor's
+      accumulator: a long radio outage should not produce a giant
+      cursor jump when traffic resumes. Should sit between one HID
+      frame and CHANNEL_HOP_POST_QUIET_MS plus a few radio retries.
+
+config ZMK_ESB_ENDPOINT_POINTER_INFLIGHT_CAP
+    int "Maximum in-flight pointer-motion HID reports queued to ESB"
+    default 5
+    range 1 32
+    help
+      Cap on the number of mouse motion HID reports that may be sitting
+      in the ESB TX FIFO awaiting send/ack. The transport tracks each
+      pointer-with-motion send as in-flight from esb_write_payload()
+      until the matching TX event consumes its motion-ring slot.
+      esb_transport_pointer_backpressure() returns true once the count
+      reaches this value, and the input processor treats that signal
+      like a quiet window: motion coalesces in the per-instance
+      accumulator and button edges queue, so further motion is added
+      to the next emission once a TX event opens an in-flight slot.
+
+      The cap should be well below ESB_TX_FIFO_SIZE so the radio never
+      has more than a few reports to drain in tail latency, and below
+      POINTER_MOTION_RING_SIZE so the in-flight bookkeeping never
+      saturates the ring before the FIFO does. Lowering it tightens
+      the backpressure (cursor stays current at the cost of slightly
+      reduced peak burst throughput); raising it lets ESB queue more
+      frames before the input processor stops feeding new ones.
+
+config ZMK_ESB_ENDPOINT_CRITICAL_MAX_RETRANSMIT
+    bool "Use elevated ESB retransmit count for critical packets"
+    default n
+    help
+      When enabled, the following keyboard->dongle packets are
+      transmitted with CRITICAL_RETRANSMIT_COUNT retries regardless of
+      the global RETRANSMIT_COUNT or any adaptive-retry decision:
+
+        BEACON, PAIR_RESP            (pairing, pipe 0)
+        DISCONNECT, VERIFY_REQ       (control, pipe 1)
+        CHANNEL_HOP_PROPOSAL,
+        HOP_OFFER, IDLE              (hop coordination / silence, pipe 1)
+
+      HID reports, shell relay packets, and benchmark probes keep their
+      normal retransmit count (adaptive or static). The override is
+      applied only while a critical packet is in flight and reverts as
+      soon as the matching TX event arrives, so steady-state HID
+      latency is unaffected. Best-effort: a back-to-back critical send
+      may briefly leave the radio at the elevated count until the next
+      TX event or adaptive-retry tick restores it.
+
+config ZMK_ESB_ENDPOINT_CRITICAL_RETRANSMIT_COUNT
+    int "Retransmit count for critical packets when override is active"
+    depends on ZMK_ESB_ENDPOINT_CRITICAL_MAX_RETRANSMIT
+    default 15
+    range 0 15
+    help
+      ESB retransmit count applied to critical packets when
+      CRITICAL_MAX_RETRANSMIT is enabled. The nRF ESB library hardware
+      ceiling is 15. Lowering this trades robustness for shorter
+      worst-case TX-drain windows (each retransmit consumes
+      RETRANSMIT_DELAY_US microseconds of air time on failure).
+
+config ZMK_ESB_ENDPOINT_CRIT_OVERRIDE_RING_SIZE
+    int "Critical-override per-send ring depth"
+    depends on ZMK_ESB_ENDPOINT_CRITICAL_MAX_RETRANSMIT
+    default 8
+    range 2 64
+    help
+      Capacity of the parallel ring tracking which recent sends pushed the
+      radio's retransmit_count to CRITICAL_RETRANSMIT_COUNT, so the matching
+      TX event can restore the steady-state value. Sized like the other
+      per-send rings; should comfortably exceed the typical number of
+      in-flight critical packets in ESB's TX FIFO. MUST be a power of two
+      (the index path uses `& (SIZE - 1)`); a BUILD_ASSERT in
+      esb_transport.c enforces this at compile time.
+
+config ZMK_ESB_ENDPOINT_BEACON_INTERVAL_MS
+    int "Pairing beacon interval (milliseconds)"
+    default 50
+    range 10 1000
+    help
+      How often the keyboard broadcasts PAIR beacons while unpaired.
+
+config ZMK_ESB_ENDPOINT_BEACON_INITIAL_DELAY_MS
+    int "Initial beacon delay after activation or unpair (ms)"
+    default 10
+    range 0 500
+    help
+      How long to wait before sending the very first beacon after ESB
+      activates, after unpairing, or after a disconnect.
+
+config ZMK_ESB_ENDPOINT_VERIFY_INTERVAL_MS
+    int "Identity VERIFY_REQ retransmit interval (ms)"
+    default 250
+    range 50 2000
+    help
+      How often the keyboard sends ESB_PKT_VERIFY_REQ while in the VERIFYING
+      state (reconnect with a stored peer). A response with a matching
+      device_id transitions to CONNECTED; a mismatch keeps the keyboard in
+      VERIFYING indefinitely so HID stays suppressed against a stranger dongle.
+
+config ZMK_ESB_ENDPOINT_BOOT_CHECK_DELAY_MS
+    int "Boot-time profile check delay (milliseconds)"
+    default 650
+    range 100 10000
+    help
+      ZMK does not raise zmk_ble_active_profile_changed for the profile
+      loaded from settings at boot. This module polls the active profile
+      once after this delay to activate ESB when the loaded profile is
+      the last slot. The delay must be long enough for settings subsystem
+      to finish restoring active_profile.
+
+config ZMK_ESB_ENDPOINT_BLE_QUIESCE_MS
+    int "BLE quiesce delay before ESB activation (milliseconds)"
+    default 50
+    range 0 1000
+    help
+      After disconnecting peers and stopping advertising, wait this long
+      before taking the radio for ESB, so the BLE LL finishes any in-flight
+      radio work.
+
+config ZMK_ESB_ENDPOINT_CTRL_STACK_SIZE
+    int "ESB control thread stack size (bytes)"
+    default 2048
+
+config ZMK_ESB_ENDPOINT_CTRL_THREAD_PRIORITY
+    int "ESB control thread cooperative priority"
+    default 7
+    range 0 13
+
+config ZMK_ESB_ENDPOINT_CTRL_MSGQ_DEPTH
+    int "ESB control message queue depth"
+    default 5
+    range 2 16
+
+config ZMK_ESB_ENDPOINT_TX_FAIL_WARN_THRESHOLD
+    int "Consecutive TX failures before warning log"
+    default 3
+    range 1 100
+
+config ZMK_ESB_ENDPOINT_TX_FAIL_ERR_THRESHOLD
+    int "Consecutive TX failures before error log and TX flush"
+    default 5
+    range 1 100
+
+config ZMK_ESB_ENDPOINT_HID_QUIET_KB_QUEUE_DEPTH
+    int "Keyboard HID report snapshot ring depth for transport-quiet windows"
+    default 8
+    range 1 64
+    help
+      Depth of the per-edge keyboard report snapshot ring used to defer
+      reports past a transport-quiet window (post-hop quiet, sync-TX
+      side-trip). esb_transport_send() drops silently during those
+      windows; without queueing, intermediate press/release edges are
+      lost and a missed press can strand a modifier on the host. On
+      overrun the oldest entry is shifted out so the queue still ends on
+      the latest state. Each entry is sizeof(struct
+      zmk_hid_keyboard_report_body) (~8 B HKRO, up to ~30 B NKRO).
+
+config ZMK_ESB_ENDPOINT_HID_QUIET_CONS_QUEUE_DEPTH
+    int "Consumer HID report snapshot ring depth for transport-quiet windows"
+    default 4
+    range 1 64
+    help
+      Same role as HID_QUIET_KB_QUEUE_DEPTH but for consumer (media key)
+      reports. Consumer events are user-paced; a press+release pair
+      within one quiet window is the realistic upper bound. Each entry
+      is sizeof(struct zmk_hid_consumer_report_body) (8-16 B).
+
+config ZMK_ESB_ENDPOINT_HID_QUIET_RETRY_MS
+    int "HID report quiet-drain poll cadence (ms)"
+    default 1
+    range 1 50
+    help
+      Cadence at which the HID-relay drain worker re-checks
+      esb_transport_is_quiet() while a quiet window is open. Drives
+      replay latency once the window ends — each pending snapshot lands
+      within this many ms of quiet ending. Lower values trade a tiny
+      bit of workqueue load for tighter replay timing.
+
+config ZMK_ESB_ENDPOINT_IP_PENDING_BTN_QUEUE
+    int "Input-processor pending button-edge queue depth"
+    default 4
+    range 1 32
+    help
+      Per-instance ring depth for mouse-button edges that fall during a
+      transport-quiet window or while pointer back-pressure is active.
+      Drained in order once the deferral condition clears so the host
+      sees each press/release. Sized for a press+release pair with
+      margin; on overrun the oldest entry is shifted out so the queue
+      still ends on the latest state. Mirror of HID_QUIET_KB_QUEUE_DEPTH
+      for the input processor side.
+
+config ZMK_ESB_ENDPOINT_IP_QUIET_RETRY_MS
+    int "Input-processor quiet-drain poll cadence (ms)"
+    default 1
+    range 1 50
+    help
+      Cadence at which the input processor's retry worker re-checks
+      esb_transport_is_quiet() / esb_transport_pointer_backpressure()
+      while either signal is set. Drives motion + queued button-edge
+      replay latency once the deferral condition clears. Mirror of
+      HID_QUIET_RETRY_MS for the input processor side.
+
+config ZMK_ESB_ENDPOINT_CHANNEL_HOP
+    bool "Dynamic channel hopping on TX failure"
+    default y
+    help
+      When enabled, the endpoint negotiates a "committed next channel"
+      with the dongle during healthy operation and hops to it when a
+      burst of TX failures indicates interference on the current channel.
+      The recently-bad channel is quarantined to prevent immediate reuse.
+
+if ZMK_ESB_ENDPOINT_CHANNEL_HOP
+
+config ZMK_ESB_ENDPOINT_HOP_RETRY_DELAY_MS
+    int "Hop-worker re-arm delay after esb_transport_set_channel -EBUSY (ms)"
+    default 10 if ZMK_ESB_ENDPOINT_CRITICAL_MAX_RETRANSMIT
+    default 5
+    range 1 100
+    help
+      Delay before re-submitting hop_work after esb_transport_set_channel
+      returns -EBUSY. -EBUSY resolves within one or two TX slots
+      (RETRANSMIT_DELAY_US * retransmit_count of drain), so this value
+      must comfortably exceed the worst-case wait. Too short busy-loops
+      the hop worker; too long noticeably delays the hop response.
+
+      The default rises automatically when CRITICAL_MAX_RETRANSMIT is
+      enabled because hop coordination packets (PROPOSAL, HOP_OFFER)
+      then ride at CRITICAL_RETRANSMIT_COUNT instead of the global
+      RETRANSMIT_COUNT, making the worst-case drain longer.
+
+config ZMK_ESB_ENDPOINT_CHANNEL_HOP_TX_FAIL_WINDOW_MS
+    int "Continuous TX-failure duration before triggering a channel hop (ms)"
+    default 32
+    range 2 1000
+    help
+      A channel hop fires once TX has been failing continuously for this
+      many milliseconds — i.e. at least one failure arrived, no TX_SUCCESS
+      has been seen since, and the window has elapsed. Using a time window
+      (rather than a raw packet count) makes the decision independent of
+      HID report rate and retransmit latency. Any TX_SUCCESS resets the
+      streak so the next hop evaluation starts fresh.
+
+config ZMK_ESB_ENDPOINT_CHANNEL_HOP_WEAK_LINK_MS
+    int "No-TX_SUCCESS duration before triggering a weak-link hop (ms)"
+    default 80
+    range 0 5000
+    help
+      Hop if no TX_SUCCESS has arrived for this long while actively
+      sending — even if some packets succeeded in between. Catches weak
+      links where the fail-window trigger
+      (CHANNEL_HOP_TX_FAIL_WINDOW_MS) never accumulates because
+      occasional successes keep resetting consecutive_tx_fail and
+      m_first_fail_ms, so the endpoint stays put while the dongle's
+      RX-silence watchdog hops alone and validation always fails. Must
+      be larger than TX_FAIL_WINDOW_MS so the fast dead-link path still
+      wins. Should be smaller than the dongle's
+      DONGLE_CHANNEL_HOP_RX_SILENCE_MS so the endpoint
+      hops first and the dongle's silence watchdog can meet it on the
+      new channel. Set to 0 to disable.
+
+config ZMK_ESB_ENDPOINT_CHANNEL_HOP_POST_QUIET_MS
+    int "Post-hop quiet period before resuming TX (ms)"
+    default 2
+    range 0 1000
+    help
+      After a channel hop, suppress all outgoing traffic for this many
+      milliseconds. This gives the dongle's speculative-hop state machine
+      time to catch up on the new channel before we resume flooding it —
+      packets sent during this window would otherwise fail and feed right
+      back into the TX-fail accounting. The post-hop PROPOSAL burst is
+      also delayed by this amount so its first packet lands after the
+      dongle has had a chance to settle.
+
+config ZMK_ESB_ENDPOINT_MOTION_MAX_STALE_MS
+    int "Drop accumulated pointer motion older than this (ms)"
+    default 100
+    range 1 5000
+    help
+      Maximum age of accumulated pointer deltas in the ESB input
+      processor before they are dropped instead of flushed. Dropping
+      stale motion prevents a post-quiet catch-up flush from teleporting
+      the cursor by tens of accumulated deltas after a long stall
+      (post-hop quiet, sync-TX side-trip, radio issue). Should sit
+      between one HID frame (~1 ms at 1 kHz) and CHANNEL_HOP_POST_QUIET_MS
+      plus a few radio retries. Button edges always flush regardless of
+      staleness.
+
+config ZMK_ESB_ENDPOINT_CHANNEL_QUARANTINE_MS
+    int "Quarantine hold time for a bad channel (ms)"
+    default 300000
+    range 1000 600000
+    help
+      How long a channel stays in quarantine after a hop. Quarantined
+      channels are excluded from the candidate set for new hops, and the
+      area around them (see CHANNEL_QUARANTINE_MIN_DISTANCE) is also
+      avoided whenever possible.
+
+config ZMK_ESB_ENDPOINT_CHANNEL_QUARANTINE_MIN_DISTANCE
+    int "Minimum distance from any quarantined channel (MHz)"
+    default 5
+    range 0 20
+    help
+      New candidate channels must be at least this many steps away from
+      every quarantined channel. If no channel satisfies the full
+      distance, the selection progressively relaxes the distance (down
+      to adjacent, but never reusing a quarantined channel itself).
+
+config ZMK_ESB_ENDPOINT_CHANNEL_HOP_NEGOTIATE_INTERVAL_MS
+    int "Interval between channel-hop negotiation rounds (ms) — steady state"
+    default 60000
+    range 500 60000
+    help
+      How often the endpoint re-proposes a committed next channel while
+      committed_next is already populated. Lower values react faster to
+      quarantine changes but add background traffic.
+
+config ZMK_ESB_ENDPOINT_CHANNEL_HOP_NEGOTIATE_RETRY_MS
+    int "Negotiation retry interval while committed_next is missing (ms)"
+    default 50
+    range 20 5000
+    help
+      If the endpoint has no committed_next (e.g. fresh connect, post-
+      hop, CONFIRM was lost), PROPOSALs are fired at this faster cadence
+      until CONFIRM arrives. The steady-state interval (above) then
+      takes over.
+
+config ZMK_ESB_ENDPOINT_CHANNEL_HOP_REQUEST_BURST_COUNT
+    int "Number of fast-retry PROPOSAL attempts seeded by an inbound REQUEST"
+    default 2
+    range 1 50
+    help
+      When the dongle queues a CHANNEL_HOP_REQUEST (its committed_next
+      is empty and it wants a fresh PROPOSAL), the endpoint seeds this
+      many additional fast-retry attempts at NEGOTIATE_RETRY_MS cadence.
+      A single PROPOSAL is too easy to lose on a weak link; without the
+      burst, the next attempt would be one full NEGOTIATE_INTERVAL_MS
+      away whenever the endpoint's own committed_next happens to be
+      valid (needs_commit=false), so a single dropped PROPOSAL strands
+      the dongle for the steady-state interval. The burst is consumed
+      one attempt per negotiate_work fire and reset to zero on CONFIRM
+      receipt (dongle is back in sync, no more retries needed).
+
+config ZMK_ESB_ENDPOINT_IDLE_THRESHOLD_MS
+    int "Time without user TX before declaring the endpoint idle (ms)"
+    default 50
+    range 50 60000
+    help
+      If no HID / shell-relay packet is sent for this long, the endpoint
+      transitions to an idle state: it sends ESB_PKT_IDLE once (delivered
+      with ESB retries), stops sending CHANNEL_HOP_PROPOSAL, and
+      suppresses its own TX-failure hop trigger so idle heartbeats failing
+      repeatedly cannot drive a hop. The next user packet flips it back
+      to active.
+
+config ZMK_ESB_ENDPOINT_CHANNEL_HOP_POST_BURST_COUNT
+    int "Post-hop PROPOSAL burst count"
+    default 2
+    range 0 50
+    help
+      After a channel hop, the endpoint fires this many PROPOSAL packets
+      on the new channel in quick succession so the dongle's speculative
+      hop has non-IDLE traffic to validate against within the
+      DONGLE_CHANNEL_HOP_VALIDATE_MS window. Until the first CONFIRM
+      arrives the burst picks fresh candidates to rebuild committed_next;
+      after that it re-affirms the agreed channel so a dropped CONFIRM
+      mid-burst cannot leave dongle and endpoint holding different "next"
+      channels. Set to 0 to disable.
+
+config ZMK_ESB_ENDPOINT_CHANNEL_HOP_POST_BURST_INTERVAL_MS
+    int "Post-hop PROPOSAL burst interval (ms between packets)"
+    default 15
+    range 5 1000
+
+config ZMK_ESB_ENDPOINT_CHANNEL_HOP_POST_BURST_RENDEZVOUS_EVERY
+    int "Post-hop burst: send PROPOSAL on rendezvous channel every Nth tick"
+    default 4
+    range 0 50
+    help
+      During the post-hop PROPOSAL burst, every Nth tick is sent on the
+      DTS-default rendezvous channel instead of the new channel, with the
+      proposed field pointing to the keyboard's actual current channel.
+      The dongle's rollback dwell cycle visits the rendezvous channel
+      regularly; catching one of these PROPOSALs lets the dongle commit
+      the right next channel and converge on the keyboard even if it
+      missed the original hop entirely. Set to 0 to disable.
+
+config ZMK_ESB_ENDPOINT_CHANNEL_HOP_RENDEZVOUS_TIMEOUT_MS
+    int "Synchronous rendezvous PROPOSAL TX timeout (ms)"
+    default 10
+    range 1 50
+    help
+      Hard cap on how long the post-hop burst handler will block waiting
+      for the rendezvous-channel PROPOSAL's TX_SUCCESS or TX_FAILED. With
+      retransmit_count=2 and retransmit_delay=470us a worst-case 2-Mbps
+      packet round trip is well under 2 ms; 5 ms allows comfortable
+      headroom without ever stalling the system workqueue.
+
+config ZMK_ESB_ENDPOINT_CHANNEL_HOP_RENDEZVOUS_FALLBACK_MS
+    int "Force a rendezvous-channel hop after this many ms of post-hop TX failure"
+    default 200
+    range 0 10000
+    help
+      If TX continues to fail for this long after a hop committed (i.e.
+      we are inside the cooldown window with no TX_SUCCESS seen since the
+      hop), force a hop to the DTS-default rendezvous channel, bypassing
+      the cooldown gate AND the quarantine list. The rendezvous channel
+      is the dongle's always-included rollback anchor, so worst-case
+      re-acquisition becomes bounded instead of probabilistic.
+
+      MUST be larger than DONGLE_CHANNEL_HOP_RX_SILENCE_MS +
+      DONGLE_CHANNEL_HOP_VALIDATE_MS so the
+      endpoint stays on the new channel long enough for the dongle to
+      (a) detect the silence on the old channel, (b) hop to the
+      committed_next, and (c) validate via inbound RX. With a smaller
+      value, the endpoint reverts to default before the dongle ever
+      arrives, so every speculative-hop validation fails and the dongle
+      keeps logging "speculation failed, reverted". Set to 0 to disable.
+
+config ZMK_ESB_ENDPOINT_CHANNEL_HOP_COOLDOWN_MS
+    int "Minimum dwell on the new channel before another hop can fire (ms)"
+    default 250
+    range 0 10000
+    help
+      After a successful channel hop, TX-failure-triggered hops are
+      suppressed for this long. The window must cover the dongle's own
+      silence-watchdog + validate budget (DONGLE_CHANNEL_HOP_RX_SILENCE_MS
+      + DONGLE_CHANNEL_HOP_VALIDATE_MS) so the dongle
+      has time to arrive on the new channel AND receive at least one
+      PROPOSAL before the endpoint bounces away again.
+
+config ZMK_ESB_ENDPOINT_LINK_QUALITY_WINDOW
+    int "Link-quality sliding window size (ACKed packets)"
+    default 32
+    range 8 32
+    help
+      Number of recent ACKed TX events held in the link-quality shift
+      register. Each bit is 1 if event->tx_attempts > 1 (i.e. at least
+      one ESB retransmit was needed). Used by the cooperative-hop
+      trigger and exposed for shell observability.
+
+config ZMK_ESB_ENDPOINT_LINK_QUALITY_NOACK_RING_SIZE
+    int "Link-quality noack-tracking ring depth"
+    default 8
+    range 2 64
+    help
+      Capacity of the parallel ring that records the noack flag of each
+      recent send so the matching TX event can decide whether to feed the
+      link-quality popcount/EWMA. Noack events report tx_attempts=1
+      unconditionally and would dilute the signal. Sized like the other
+      per-send rings. MUST be a power of two (the index path uses
+      `& (SIZE - 1)`); a BUILD_ASSERT in esb_transport.c enforces this at
+      compile time.
+
+config ZMK_ESB_ENDPOINT_LINK_DEGRADED_THRESHOLD
+    int "Cooperative-hop trigger: retried packets in window"
+    default 10
+    range 1 32
+    help
+      The cooperative-hop handshake fires when at least this many of the
+      LINK_QUALITY_WINDOW most recent ACKed packets needed an ESB
+      retransmit.
+
+config ZMK_ESB_ENDPOINT_LINK_DEGRADED_REARM
+    int "Cooperative-hop trigger: re-arm threshold"
+    default 2
+    range 0 32
+    help
+      After a cooperative-hop trigger fires, suppress further triggers
+      until the popcount drops back to this value (or COOP_HOP_COOLDOWN_MS
+      elapses). Provides hysteresis so a single noisy window doesn't
+      keep retriggering.
+
+config ZMK_ESB_ENDPOINT_LINK_DEGRADED_FAST_THRESHOLD
+    int "Cooperative-hop trigger: retried packets in last 8"
+    default 4
+    range 0 8
+    help
+      Fast-path trigger: also fire if at least this many of the most
+      recent 8 ACKed packets needed retransmission. Catches sudden
+      cliffs before the wide LINK_QUALITY_WINDOW catches up. Set to 9
+      to disable.
+
+config ZMK_ESB_ENDPOINT_COOP_HOP_HOP_IN_MS
+    int "Cooperative hop: delay between OFFER delivery and channel switch (ms)"
+    default 4
+    range 2 50
+    help
+      How long after the HOP_OFFER is delivered both sides wait before
+      flipping the radio. Must exceed the worst-case workqueue
+      scheduling jitter on either side (~1 ms) plus enough margin for
+      the dongle's stop_rx → set_channel → start_rx sequence
+      (CONFIG_DONGLE_COOP_HOP_PRX_SETUP_BUDGET_MS). 8 ms is a
+      comfortable default; lower values reduce blackout but risk skew.
+
+config ZMK_ESB_ENDPOINT_COOP_HOP_COOLDOWN_MS
+    int "Cooperative hop: minimum interval between two coop hops (ms)"
+    default 2500
+    range 100 30000
+    help
+      After a cooperative hop commits, suppress the next coop trigger
+      for this long. Independent of the TX-fail cooldown
+      (CHANNEL_HOP_COOLDOWN_MS) so that an existing speculative hop is
+      not blocked by a prior coop hop and vice versa. Should comfortably
+      exceed the link-quality window's settling time.
+
+config ZMK_ESB_ENDPOINT_COOP_HOP_QUARANTINE_MS
+    int "Cooperative hop: quarantine hold for the channel just left (ms)"
+    default 30000
+    range 100 600000
+    help
+      Coop hops fire on a moderately degraded link, where interference
+      is often transient (someone walked in front of the antenna, a
+      neighbouring radio burst). Quarantining for the full
+      CHANNEL_QUARANTINE_MS would lock out a perfectly good channel
+      after one bad few hundred milliseconds. This shorter hold gives
+      the channel a chance to come back into the candidate pool quickly.
+
+endif # ZMK_ESB_ENDPOINT_CHANNEL_HOP
+
+config ZMK_ESB_ENDPOINT_FLUSH_QUIET_MS
+    int "Pre-flush radio quiet wait (ms)"
+    default 2
+    range 0 100
+    help
+      Before esb_transport_flush_tx() drops queued packets, it waits
+      until the radio has produced no TX event (success or failure) for
+      this many milliseconds. The intent is to let any in-flight
+      transmit complete naturally so the flushed FIFO never contains a
+      packet that was about to ack — a synchronous yank during an
+      active TX cycle pointlessly turns a packet that would have made
+      it into a drop. 0 disables the wait (immediate flush). Only the
+      public API observes this gate; internal flush paths reachable
+      from ISR / hop context bypass it and flush immediately.
+
+config ZMK_ESB_ENDPOINT_FLUSH_FORCE_MS
+    int "Pre-flush wait ceiling before forced flush (ms)"
+    default 5
+    range 1 500
+    help
+      Upper bound on how long esb_transport_flush_tx() will wait for
+      the QUIET_MS silence window before giving up and forcing the
+      flush. Bounds the worst-case latency the IDLE-packet path adds
+      to enter_idle_state when the radio is sustaining continuous TX
+      activity (e.g. a saturated mouse stream the user just stopped).
+      Must be >= FLUSH_QUIET_MS for the wait to do anything.
+
+rsource "shell/Kconfig"
+rsource "behaviors/Kconfig"
+
+config ZMK_ESB_ENDPOINT_BENCH
+    bool "ESB link benchmark (throughput + RSSI)"
+    depends on ZMK_ESB_ENDPOINT && SHELL
+    default n if ZMK_ESB_ENDPOINT && SHELL
+    help
+      Adds 'esb bench' shell command. Run once to start the benchmark;
+      run again after completion to read throughput and RSSI.
+
+config ZMK_ESB_ENDPOINT_BENCH_DURATION_S
+    int "Benchmark duration (seconds)"
+    default 10
+    range 1 60
+    depends on ZMK_ESB_ENDPOINT_BENCH
+
+config ZMK_ESB_ENDPOINT_BENCH_RESULT_POLL_MS
+    int "Benchmark result polling interval (ms)"
+    default 50
+    range 10 500
+    depends on ZMK_ESB_ENDPOINT_BENCH
+
+config ZMK_ESB_ENDPOINT_BENCH_RESULT_TIMEOUT_MS
+    int "Benchmark result wait timeout (ms)"
+    default 1500
+    range 100 10000
+    depends on ZMK_ESB_ENDPOINT_BENCH
+
+endif # ZMK_ESB_ENDPOINT
