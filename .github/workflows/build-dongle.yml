@@ -1,6 +1,5 @@
 # SPDX-License-Identifier: MIT
 # Build: nRF52833 ESB Dongle (.hex)
-# Minimal west manifest, only 3 projects.
 
 name: 🔌 Build Dongle
 
@@ -28,26 +27,42 @@ jobs:
           sudo tar xf zephyr-sdk-${SDK_VER}_linux-x86_64_minimal.tar.xz && sudo rm *.tar.xz
           cd zephyr-sdk-${SDK_VER} && sudo ./setup.sh -t arm-zephyr-eabi -h
 
-      - name: Build
+      - name: Clone Zephyr + build
         run: |
-          mkdir -p /opt/ws && cd /opt/ws
-          cat > west.yml << EOF
-          manifest:
-            self: { path: app }
-            projects:
-              - name: zephyr
-                url: https://github.com/zephyrproject-rtos/zephyr
-                revision: v3.7.0
-              - name: hal_nordic
-                url: https://github.com/zephyrproject-rtos/hal_nordic
-                revision: master
-                path: modules/hal/nordic
-          EOF
-          west init -l . && west update --fetch=smart -o=--depth=1
-          rm -rf app && ln -s ${{ github.workspace }}/repo/dongle app
-          west build -b nrf52833dk_nrf52833 -s app
-          mkdir -p ${{ github.workspace }}/firmware
-          cp build/zephyr/zephyr.hex ${{ github.workspace }}/firmware/zmk-esb-dongle-nrf52833.hex
+          set -ex
+
+          # Clone zephyr and modules
+          mkdir -p /opt/zephyr/modules/hal
+          git clone --depth=1 --branch v3.7.0 https://github.com/zephyrproject-rtos/zephyr /opt/zephyr/zephyr
+          git clone --depth=1 https://github.com/zephyrproject-rtos/hal_nordic /opt/zephyr/modules/hal/nordic
+          git clone --depth=1 https://github.com/zephyrproject-rtos/cmsis /opt/zephyr/modules/hal/cmsis
+
+          export ZEPHYR_BASE=/opt/zephyr/zephyr
+          export ZEPHYR_MODULES="/opt/zephyr/modules/hal/nordic;/opt/zephyr/modules/hal/cmsis"
+          export ZEPHYR_SDK_INSTALL_DIR=/opt/zephyr-sdk-${SDK_VER}
+          source "$ZEPHYR_BASE/zephyr-env.sh"
+
+          # Build using west from Zephyr app dir
+          cd /opt/zephyr
+          west init -l zephyr 2>/dev/null || true
+          cd ${{ github.workspace }}/repo/dongle
+          west build -b nrf52833dk_nrf52833
+
+          echo "=== Build output ==="
+          ls -la build/zephyr/zephyr.hex 2>/dev/null && echo "HEX FOUND" || echo "NO HEX"
+
+      - name: Upload firmware
+        run: |
+          if [ -f ${{ github.workspace }}/repo/dongle/build/zephyr/zephyr.hex ]; then
+            mkdir -p ${{ github.workspace }}/firmware
+            cp ${{ github.workspace }}/repo/dongle/build/zephyr/zephyr.hex ${{ github.workspace }}/firmware/zmk-esb-dongle-nrf52833.hex
+            echo "firmware file size:"
+            ls -lh ${{ github.workspace }}/firmware/zmk-esb-dongle-nrf52833.hex
+          else
+            echo "ERROR: No hex file produced!"
+            find ${{ github.workspace }}/repo/dongle/build -name "*.hex" -o -name "*.elf" 2>/dev/null || true
+            exit 1
+          fi
 
       - uses: actions/upload-artifact@v4
         with:

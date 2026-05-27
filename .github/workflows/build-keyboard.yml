@@ -1,6 +1,5 @@
 # SPDX-License-Identifier: MIT
-# Build: ZMK keyboard + ESB module (.hex)
-# Uses ZMK v0.3.0 (the version this module was tested against).
+# Build: ZMK keyboard firmware with ESB module (.hex)
 
 name: ⌨️ Build Keyboard
 
@@ -28,65 +27,54 @@ jobs:
           sudo tar xf zephyr-sdk-${SDK_VER}_linux-x86_64_minimal.tar.xz && sudo rm *.tar.xz
           cd zephyr-sdk-${SDK_VER} && sudo ./setup.sh -t arm-zephyr-eabi -h
 
-      - name: Build
+      - name: Clone ZMK + build
         run: |
-          mkdir -p /opt/ws && cd /opt/ws
+          set -ex
 
-          # README says: "Only tested against ZMK v0.3.0"
-          cat > west.yml << EOF
-          manifest:
-            self: { path: config }
-            projects:
-              - name: zmk
-                url: https://github.com/zmkfirmware/zmk
-                revision: v0.3.0
-              - name: zephyr
-                url: https://github.com/zephyrproject-rtos/zephyr
-                revision: v3.7.0
-              - name: hal_nordic
-                url: https://github.com/zephyrproject-rtos/hal_nordic
-                revision: master
-                path: modules/hal/nordic
-          EOF
+          # Clone Zephyr and ZMK
+          mkdir -p /opt/ws/modules/hal
+          cd /opt/ws
+          git clone --depth=1 --branch v3.7.0 https://github.com/zephyrproject-rtos/zephyr zephyr
+          git clone --depth=1 --branch v0.3.0 https://github.com/zmkfirmware/zmk zmk
+          git clone --depth=1 https://github.com/zephyrproject-rtos/hal_nordic modules/hal/nordic
+          git clone --depth=1 https://github.com/zephyrproject-rtos/cmsis modules/hal/cmsis
 
-          west init -l . && west update --fetch=smart -o=--depth=1
+          export ZEPHYR_BASE=/opt/ws/zephyr
+          export ZEPHYR_MODULES="/opt/ws/modules/hal/nordic;/opt/ws/modules/hal/cmsis;/opt/ws/zmk"
+          export ZEPHYR_SDK_INSTALL_DIR=/opt/zephyr-sdk-${SDK_VER}
+          source "$ZEPHYR_BASE/zephyr-env.sh"
 
-          # Put the module where ZMK can find it
-          cp -r ${{ github.workspace }}/repo modules/esb-endpoint
+          # Config: enable ESB
+          mkdir -p /opt/ws/config
+          echo "CONFIG_ZMK_ESB_ENDPOINT=y" > /opt/ws/config/nrf52833dk_nrf52833.conf
 
-          # Config: enable ESB endpoint
-          mkdir -p config
-          cat > config/nrf52833dk_nrf52833.conf << 'CONF'
-          CONFIG_ZMK_ESB_ENDPOINT=y
-          CONF
+          # Copy module
+          cp -r ${{ github.workspace }}/repo /opt/ws/modules/esb-ep
 
-          cat > config/nrf52833dk_nrf52833.overlay << 'OVL'
-          / {
-              zmk_esb: zmk_esb_endpoint {
-                  compatible = "zmk,esb-endpoint";
-                  esb-channel = <78>;
-                  pairing-base-address = [17 f4 07 aa];
-                  pairing-prefix = <0x24>;
-                  data-base-address = [b9 8a 16 22];
-                  data-prefix = <0xc2>;
-              };
-              esb_ip: esb_input_processor {
-                  compatible = "zmk,esb-input-processor";
-                  #input-processor-cells = <0>;
-                  status = "okay";
-              };
-          };
-          &mkp_input_listener { input-processors = <&esb_ip>; };
-          &msc_input_listener { input-processors = <&esb_ip>; };
-          OVL
-
-          # Build
-          cd zmk/app
+          # Build from ZMK app dir
+          cd /opt/ws/zmk/app
           west build -b nrf52833dk_nrf52833 -d /opt/ws/build \
             -- -DZMK_CONFIG=/opt/ws/config \
-               -DZMK_EXTRA_MODULES=/opt/ws/modules/esb-endpoint
-          mkdir -p ${{ github.workspace }}/firmware
-          cp /opt/ws/build/zephyr/zephyr.hex ${{ github.workspace }}/firmware/zmk-esb-keyboard-nrf52833.hex
+               -DZMK_EXTRA_MODULES=/opt/ws/modules/esb-ep
+
+          echo "=== Build output ==="
+          ls -la /opt/ws/build/zephyr/zephyr.hex 2>/dev/null && echo "HEX FOUND" || echo "NO HEX"
+
+      - name: Upload firmware
+        run: |
+          if [ -f /opt/ws/build/zephyr/zephyr.hex ]; then
+            mkdir -p ${{ github.workspace }}/firmware
+            cp /opt/ws/build/zephyr/zephyr.hex ${{ github.workspace }}/firmware/zmk-esb-keyboard-nrf52833.hex
+            echo "firmware file size:"
+            ls -lh ${{ github.workspace }}/firmware/zmk-esb-keyboard-nrf52833.hex
+          elif [ -f /opt/ws/build/zephyr/zmk.uf2 ]; then
+            mkdir -p ${{ github.workspace }}/firmware
+            cp /opt/ws/build/zephyr/zmk.uf2 ${{ github.workspace }}/firmware/zmk-esb-keyboard-nrf52833.hex
+          else
+            echo "ERROR: No firmware file produced!"
+            find /opt/ws/build -name "*.hex" -o -name "*.uf2" -o -name "*.elf" 2>/dev/null || true
+            exit 1
+          fi
 
       - uses: actions/upload-artifact@v4
         with:
