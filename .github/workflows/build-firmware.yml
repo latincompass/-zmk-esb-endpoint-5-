@@ -1,67 +1,52 @@
-# SPDX-License-Identifier: MIT
-# GitHub Actions: Build ESB dongle and keyboard firmware
-
 name: Build Firmware
 
 on:
   push:
-    branches: [main]
+    branches: [ main ]
   pull_request:
+    branches: [ main ]
   workflow_dispatch:
 
 jobs:
   build-dongle:
     runs-on: ubuntu-24.04
-    name: Build ESB Dongle (nRF52833)
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
         with:
-          submodules: 'recursive'
-      
+          submodules: recursive
+
       - name: Install Zephyr SDK
         uses: zephyrproject-rtos/action-zephyr-sdk@v12
         with:
           sdk-version: '0.16.4'
-          cmake-version: '3.26.4'
-          ninja-version: '1.11.1'
-          
-      - name: Initialize Zephyr workspace for dongle
-        working-directory: dongle
-        run: |
-          west init -l .
-          west update
-          west zephyr-export
-      
+
       - name: Build dongle firmware
         working-directory: dongle
         run: |
+          west init -l .
+          west update --narrow -o=--depth=1
           west build -b nrf52833dk_nrf52833 -p auto .
-      
-      - name: Upload dongle firmware
+
+      - name: Upload dongle hex
         uses: actions/upload-artifact@v4
         with:
-          name: dongle-firmware
+          name: dongle-nrf52833dk
           path: dongle/build/zephyr/zephyr.hex
 
   build-keyboard:
     runs-on: ubuntu-24.04
-    name: Build Keyboard Firmware (HHKB nRF52833)
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
         with:
-          submodules: 'recursive'
+          submodules: recursive
           path: zmk-esb-endpoint
-      
+
       - name: Install Zephyr SDK
         uses: zephyrproject-rtos/action-zephyr-sdk@v12
         with:
           sdk-version: '0.16.4'
-          cmake-version: '3.26.4'
-          ninja-version: '1.11.1'
-          
-      - name: Create ZMK config project
+
+      - name: Setup ZMK workspace
         run: |
           mkdir -p zmk-config/config
           cp -r zmk-esb-endpoint/examples/hhkb/* zmk-config/config/
@@ -71,7 +56,7 @@ jobs:
             remotes:
               - name: zmkfirmware
                 url-base: https://github.com/zmkfirmware
-              - name: local-esb
+              - name: esb-local
                 url-base: ../zmk-esb-endpoint
             projects:
               - name: zmk
@@ -79,27 +64,22 @@ jobs:
                 revision: main
                 import: app/west.yml
               - name: zmk-esb-endpoint
-                remote: local-esb
+                remote: esb-local
                 revision: main
                 path: modules/zmk-esb-endpoint
             self:
               path: config
           EOF
-      
-      - name: Initialize ZMK workspace
+
+      - name: Build keyboard firmware
         working-directory: zmk-config
         run: |
           west init -l .
           west update --narrow -o=--depth=1
-          west zephyr-export
-      
-      - name: Build keyboard firmware
-        working-directory: zmk-config
-        run: |
           west build -b nrf52833dk_nrf52833 -p auto zmk/app -- -DZMK_CONFIG=${PWD}/config
-      
-      - name: Upload keyboard firmware
+
+      - name: Upload keyboard hex
         uses: actions/upload-artifact@v4
         with:
-          name: keyboard-firmware
+          name: keyboard-hhkb-nrf52833dk
           path: zmk-config/build/zephyr/zephyr.hex
