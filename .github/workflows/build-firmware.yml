@@ -16,18 +16,22 @@ jobs:
         with:
           submodules: recursive
 
+      - name: Install Python 3.12
+        run: |
+          sudo add-apt-repository ppa:deadsnakes/ppa -y
+          sudo apt-get update
+          sudo apt-get install -y python3.12 python3.12-dev python3.12-venv python3.12-distutils
+
       - name: Install dependencies
         run: |
-          sudo sed -i 's/archive.ubuntu.com/mirrors.tuna.tsinghua.edu.cn/g' /etc/apt/sources.list
-          sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             git cmake ninja-build gperf ccache dfu-util device-tree-compiler \
-            wget python3-dev python3-pip python3-setuptools python3-wheel \
+            wget python3-pip python3-setuptools python3-wheel \
             xz-utils file make gcc gcc-multilib g++-multilib libsdl2-dev
 
-      - name: Install Python packages with Tsinghua mirror
+      - name: Install Python packages
         run: |
-          pip3 install --user -i https://pypi.tuna.tsinghua.edu.cn/simple west pyelftools
+          python3.12 -m pip install -i https://pypi.tuna.tsinghua.edu.cn/simple west pyelftools cmake
 
       - name: Install Zephyr SDK
         run: |
@@ -39,9 +43,9 @@ jobs:
         working-directory: dongle
         run: |
           export PATH=~/.local/bin:$PATH
-          west init -l .
-          west update --narrow -o=--depth=1
-          west build -b nrf52833dk_nrf52833 -p auto .
+          python3.12 -m west init -l .
+          python3.12 -m west update --narrow -o=--depth=1
+          python3.12 -m west build -b nrf52833dk_nrf52833 -p auto .
 
       - name: Check built files
         run: ls -la dongle/build/zephyr/
@@ -63,18 +67,22 @@ jobs:
           submodules: recursive
           path: zmk-esb-endpoint
 
+      - name: Install Python 3.12
+        run: |
+          sudo add-apt-repository ppa:deadsnakes/ppa -y
+          sudo apt-get update
+          sudo apt-get install -y python3.12 python3.12-dev python3.12-venv python3.12-distutils
+
       - name: Install dependencies
         run: |
-          sudo sed -i 's/archive.ubuntu.com/mirrors.tuna.tsinghua.edu.cn/g' /etc/apt/sources.list
-          sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             git cmake ninja-build gperf ccache dfu-util device-tree-compiler \
-            wget python3-dev python3-pip python3-setuptools python3-wheel \
+            wget python3-pip python3-setuptools python3-wheel \
             xz-utils file make gcc gcc-multilib g++-multilib libsdl2-dev
 
-      - name: Install Python packages with Tsinghua mirror
+      - name: Install Python packages
         run: |
-          pip3 install --user -i https://pypi.tuna.tsinghua.edu.cn/simple west pyelftools
+          python3.12 -m pip install -i https://pypi.tuna.tsinghua.edu.cn/simple west pyelftools cmake
 
       - name: Install Zephyr SDK
         run: |
@@ -111,9 +119,9 @@ jobs:
         working-directory: zmk-config
         run: |
           export PATH=~/.local/bin:$PATH
-          west init -l .
-          west update --narrow -o=--depth=1
-          west build -b nrf52833dk_nrf52833 -p auto zmk/app -- -DZMK_CONFIG=${PWD}/config
+          python3.12 -m west init -l .
+          python3.12 -m west update --narrow -o=--depth=1
+          python3.12 -m west build -b nrf52833dk_nrf52833 -p auto zmk/app -- -DZMK_CONFIG=${PWD}/config
 
       - name: Check built files
         run: ls -la zmk-config/build/zephyr/
