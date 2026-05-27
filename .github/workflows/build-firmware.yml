@@ -22,16 +22,16 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y python3.12 python3.12-dev python3.12-venv
 
-      - name: Install setuptools for Python 3.12
+      - name: Install pip for Python 3.12
         run: |
-          python3.12 -m ensurepip
-          python3.12 -m pip install setuptools wheel
+          wget -q https://bootstrap.pypa.io/get-pip.py
+          python3.12 get-pip.py
 
       - name: Install dependencies
         run: |
           sudo apt-get install -y --no-install-recommends \
             git cmake ninja-build gperf ccache dfu-util device-tree-compiler \
-            wget python3-pip \
+            wget \
             xz-utils file make gcc gcc-multilib g++-multilib libsdl2-dev
 
       - name: Install Python packages
@@ -78,16 +78,16 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y python3.12 python3.12-dev python3.12-venv
 
-      - name: Install setuptools for Python 3.12
+      - name: Install pip for Python 3.12
         run: |
-          python3.12 -m ensurepip
-          python3.12 -m pip install setuptools wheel
+          wget -q https://bootstrap.pypa.io/get-pip.py
+          python3.12 get-pip.py
 
       - name: Install dependencies
         run: |
           sudo apt-get install -y --no-install-recommends \
             git cmake ninja-build gperf ccache dfu-util device-tree-compiler \
-            wget python3-pip \
+            wget \
             xz-utils file make gcc gcc-multilib g++-multilib libsdl2-dev
 
       - name: Install Python packages
