@@ -269,3 +269,5 @@ and the module will not just build and run on anything else without edits:
 
 MIT for module sources. Vendored NCS ESB files are LicenseRef-Nordic-5-Clause —
 see `vendor/nrf-esb/LICENSE`.
+#   t r i g g e r   c i  
+ 
