@@ -3,25 +3,22 @@
  *
  * nRF52833 HHKB keyboard - DTS overlay
  *
- * This overlay configures the ESB endpoint for a 6-row × 8-column
- * HHKB-style matrix on nRF52833.
+ * 注意：实际矩阵引脚取决于你的 PCB 布线。
+ * 这是一个参考示例，展示了 HHKB Professional 2 配列的矩阵定义模式。
+ * 请根据你的实际原理图调整 GPIO 引脚和矩阵尺寸。
  *
- * HHKB Professional layout:
- *   - 6 rows, 8 columns (60% form factor)
- *   - 6KRO or NKRO
- *   - Split backspace, split right shift
- *   - 6.25u spacebar
+ * HHKB Professional 2 矩阵:
+ *   - 5 行 × 15 列（主矩阵，扫描所有物理键位）
+ *   或
+ *   - 8 行 × 8 列（64 位置，60 个键位，空位留空）
  *
- * Known pins (nRF52833):
- *   Row pins:  P0.02 - P0.07  (6 rows)
- *   Col pins:  P0.08 - P0.15  (8 columns, or P0.08-P0.15 + P1.xx if more)
- *
- * IMPORTANT: Adjust the GPIO pins to match YOUR specific PCB wiring!
- * This is a generic example - verify against your schematic.
+ * 常见引脚分配（nRF52833）：
+ *   行：P0.02 - P0.06  (5 行)
+ *   列：P0.08 - P1.01  (15 列，用 GPIO 拆分)
  */
 
 / {
-    /* ESB endpoint node */
+    /* ESB 端点节点 */
     zmk_esb: zmk_esb_endpoint {
         compatible = "zmk,esb-endpoint";
         esb-channel = <78>;
@@ -31,52 +28,69 @@
         data-prefix = <0xc2>;
     };
 
-    /* ESB input processor for mouse/pointer events */
+    /* ESB 输入处理器（用于鼠标/指针事件） */
     esb_ip: esb_input_processor {
         compatible = "zmk,esb-input-processor";
         #input-processor-cells = <0>;
         status = "okay";
     };
 
-    /* Keyboard matrix - HHKB 6x8 */
+    /* 键盘矩阵 - HHKB Professional 2
+     *
+     * 键位映射（矩阵位置 → keymap 的 binding 顺序）：
+     *   位置 00-15: Esc 1 2 3 4 5 6 7 8 9 0 - = \ `~ BSpc
+     *   位置 16-30: Tab Q W E R T Y U I O P [ ] \ Del
+     *   位置 31-43: Ctl A S D F G H J K L ; ' Ent
+     *   位置 44-56: Sft Z X C V B N M , . / Sft Fn
+     *   位置 57-62: Alt Opt  Space  Cmd Alt
+     *
+     * ===!!! 请根据你的 PCB 实际布线修改下面的 GPIO 引脚 !!!===
+     */
     kscan0: kscan {
         compatible = "zmk,kscan-gpio-matrix";
         diode-direction = "col2row";
         wakeup-source;
 
+        /*
+         * 5 个行引脚（示例）
+         * 实际使用请根据原理图修改 GPIO 号
+         */
         row-gpios
             = <&gpio0 2 (GPIO_ACTIVE_HIGH | GPIO_PULL_DOWN)>
             , <&gpio0 3 (GPIO_ACTIVE_HIGH | GPIO_PULL_DOWN)>
             , <&gpio0 4 (GPIO_ACTIVE_HIGH | GPIO_PULL_DOWN)>
             , <&gpio0 5 (GPIO_ACTIVE_HIGH | GPIO_PULL_DOWN)>
             , <&gpio0 6 (GPIO_ACTIVE_HIGH | GPIO_PULL_DOWN)>
-            , <&gpio0 7 (GPIO_ACTIVE_HIGH | GPIO_PULL_DOWN)>
             ;
 
+        /*
+         * 15 个列引脚（示例）
+         * HHKB Pro 2 标准列数 = 15
+         * P0.08-0.31 + P1.00 提供了足够的引脚
+         */
         col-gpios
-            = <&gpio0 8 GPIO_ACTIVE_HIGH>
-            , <&gpio0 9 GPIO_ACTIVE_HIGH>
+            = <&gpio0  8 GPIO_ACTIVE_HIGH>
+            , <&gpio0  9 GPIO_ACTIVE_HIGH>
             , <&gpio0 10 GPIO_ACTIVE_HIGH>
             , <&gpio0 11 GPIO_ACTIVE_HIGH>
             , <&gpio0 12 GPIO_ACTIVE_HIGH>
             , <&gpio0 13 GPIO_ACTIVE_HIGH>
             , <&gpio0 14 GPIO_ACTIVE_HIGH>
             , <&gpio0 15 GPIO_ACTIVE_HIGH>
+            , <&gpio0 16 GPIO_ACTIVE_HIGH>
+            , <&gpio0 17 GPIO_ACTIVE_HIGH>
+            , <&gpio0 18 GPIO_ACTIVE_HIGH>
+            , <&gpio0 19 GPIO_ACTIVE_HIGH>
+            , <&gpio0 20 GPIO_ACTIVE_HIGH>
+            , <&gpio0 21 GPIO_ACTIVE_HIGH>
+            , <&gpio0 22 GPIO_ACTIVE_HIGH>
             ;
     };
-
-    /* LEDs (optional - Caps Lock indicator on P1.00) */
-    /* leds: leds {
-     *     compatible = "gpio-leds";
-     *     caps_lock_led: led_0 {
-     *         gpios = <&gpio1 0 GPIO_ACTIVE_HIGH>;
-     *     };
-     * }; */
 };
 
-/* Route pointer events to ESB input processor */
+/* 转发指针事件到 ESB 输入处理器 */
 &mkp_input_listener { input-processors = <&esb_ip>; };
 &msc_input_listener { input-processors = <&esb_ip>; };
 
-/* Enable the esb_unpair behavior */
+/* 引入 esb_unpair 行为 */
 #include <behaviors/esb_unpair.dtsi>
