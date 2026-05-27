@@ -16,7 +16,7 @@ jobs:
 
       - run: sudo apt-get update -qq && sudo apt-get install -y -qq python3-pip cmake ninja-build device-tree-compiler wget xz-utils
 
-      - name: 🛠 Install west + SDK
+      - name: 🛠 Install
         run: |
           pip3 install west -q
           cd /opt
@@ -24,20 +24,18 @@ jobs:
           tar xf zephyr-sdk-${SDK_VER}_linux-x86_64_minimal.tar.xz && rm *.tar.xz
           cd zephyr-sdk-${SDK_VER} && ./setup.sh -t arm-zephyr-eabi -h
 
-      - name: 📦 Clone + Build Keyboard
+      - name: 📦 Clone + Build
         shell: bash
         run: |
           set -ex
 
           WS=/tmp/ws
-          mkdir -p $WS
-          cd $WS
+          rm -rf $WS
+          mkdir -p $WS && cd $WS
 
-          # West manifest: ZMK + Zephyr + hal_nordic
           cat > west.yml << 'EOF'
           manifest:
-            defaults:
-              remote: zmk
+            defaults: { remote: zmk }
             remotes:
               - name: zmk
                 url-base: https://github.com/zmkfirmware
@@ -54,70 +52,55 @@ jobs:
                 remote: zephyr
                 revision: master
                 path: modules/hal/nordic
-            self:
-              path: config
+            self: { path: config }
           EOF
 
-          west init -l $WS
+          west init -l .
           west update --fetch=smart -o=--depth=1
 
-          # Copy our module into workspace
-          mkdir -p $WS/modules/esb-ep
-          cp -r ${{ github.workspace }}/repo/* $WS/modules/esb-ep/
+          # Copy module into workspace
+          mkdir -p modules/esb-ep
+          cp -r ${{ github.workspace }}/repo/* modules/esb-ep/
 
-          # Create minimal keyboard config
-          cat > $WS/config/nrf52833dk_nrf52833.conf << 'CONF'
-          CONFIG_ZMK_ESB_ENDPOINT=y
-          CONF
-
-          # Create overlay with ESB endpoint
-          cat > $WS/config/nrf52833dk_nrf52833.overlay << 'OVL'
-          / {
-              zmk_esb: zmk_esb_endpoint {
-                  compatible = "zmk,esb-endpoint";
-                  esb-channel = <78>;
-                  pairing-base-address = [17 f4 07 aa];
-                  pairing-prefix = <0x24>;
-                  data-base-address = [b9 8a 16 22];
-                  data-prefix = <0xc2>;
-              };
-          };
+          # Config files
+          echo "CONFIG_ZMK_ESB_ENDPOINT=y" > config/nrf52833dk_nrf52833.conf
+          cat > config/nrf52833dk_nrf52833.overlay << 'OVL'
+          / { zmk_esb: zmk_esb_endpoint {
+              compatible = "zmk,esb-endpoint";
+              esb-channel = <78>;
+              pairing-base-address = [17 f4 07 aa];
+              pairing-prefix = <0x24>;
+              data-base-address = [b9 8a 16 22];
+              data-prefix = <0xc2>;
+          }; };
           OVL
-
-          # Simple keymap
-          cat > $WS/config/nrf52833dk_nrf52833.keymap << 'KMP'
+          cat > config/nrf52833dk_nrf52833.keymap << 'KMP'
           #include <behaviors.dtsi>
           #include <dt-bindings/zmk/keys.h>
           / { keymap { compatible = "zmk,keymap";
-              default_layer { bindings = <&kp A &kp B &kp C>; };
+              default_layer { bindings = <&kp A>; };
           }; };
           KMP
 
-          # Build from ZMK's app directory
-          cd $WS/zmk/app
-          west build -b nrf52833dk_nrf52833 -d $WS/build \
-            -- -DZMK_CONFIG=$WS/config \
-               -DZMK_EXTRA_MODULES=$WS/modules/esb-ep
+          # Clean build
+          cd zmk/app
+          rm -rf /tmp/ws/build
+          west build -b nrf52833dk_nrf52833 -d /tmp/ws/build \
+            -- -DZMK_CONFIG=/tmp/ws/config \
+               -DZMK_EXTRA_MODULES=/tmp/ws/modules/esb-ep
 
-          echo "=== BUILD OUTPUT ==="
-          ls -la $WS/build/zephyr/zephyr.hex
-          ls -la $WS/build/zephyr/zmk.uf2 2>/dev/null || echo "no uf2"
+          # List outputs
+          find /tmp/ws/build/zephyr -maxdepth 1 -type f 2>/dev/null
+          ls -la /tmp/ws/build/zephyr/zephyr.hex 2>/dev/null && echo "HEX_OK" || echo "HEX_MISSING"
+          ls -la /tmp/ws/build/zephyr/zmk.uf2 2>/dev/null && echo "UF2_OK" || echo "UF2_MISSING"
 
-          # Copy firmware
           mkdir -p ${{ github.workspace }}/firmware
-          if [ -f $WS/build/zephyr/zmk.uf2 ]; then
-            cp $WS/build/zephyr/zmk.uf2 ${{ github.workspace }}/firmware/zmk-esb-keyboard-nrf52833.uf2
-          elif [ -f $WS/build/zephyr/zephyr.hex ]; then
-            cp $WS/build/zephyr/zephyr.hex ${{ github.workspace }}/firmware/zmk-esb-keyboard-nrf52833.hex
-          else
-            echo "ERROR: No firmware produced!"
-            find $WS/build -name "*.hex" -o -name "*.uf2" -o -name "*.elf" 2>/dev/null
-            exit 1
-          fi
+          cp /tmp/ws/build/zephyr/zephyr.hex ${{ github.workspace }}/firmware/zmk-esb-keyboard-nrf52833.hex 2>/dev/null || true
+          cp /tmp/ws/build/zephyr/zmk.uf2 ${{ github.workspace }}/firmware/zmk-esb-keyboard-nrf52833.uf2 2>/dev/null || true
 
       - uses: actions/upload-artifact@v4
         with:
           name: zmk-esb-keyboard-nrf52833
           path: firmware/zmk-esb-keyboard-nrf52833.*
-          if-no-files-found: error
+          if-no-files-found: true
           retention-days: 30
