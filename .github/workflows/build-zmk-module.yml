@@ -2,9 +2,10 @@
 #
 # GitHub Actions: Build and validate ZMK module integration
 #
-# Tests that the zmk-esb-endpoint module compiles correctly as part of
-# a ZMK firmware build. Uses the official ZMK dev Docker container
-# which has west, Zephyr SDK, and ARM toolchain pre-installed.
+# Tests that the zmk-esb-endpoint module builds correctly as part of
+# a ZMK firmware build. Uses manual west + Zephyr SDK setup for
+# maximum compatibility and reliability (no external Docker image
+# dependency).
 #
 # Triggers:
 #   - Push to main (changes to src/ or dts/)
@@ -34,26 +35,37 @@ on:
 
 env:
   ZMK_REF: main
+  ZEPHYR_SDK_VERSION: 0.16.8
 
 jobs:
   build-zmk:
     runs-on: ubuntu-24.04
-    container:
-      image: zmkfirmware/zmk-dev-arm:latest
 
     steps:
       - name: Checkout module source
         uses: actions/checkout@v4
         with:
-          path: /workspace/module
+          path: module
           fetch-depth: 1
 
-      - name: Create ZMK workspace with this module
+      - name: Install system dependencies
         run: |
-          cd /workspace
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq --no-install-recommends \
+            python3-pip python3-venv python3-dev \
+            cmake ninja-build gperf ccache dfu-util \
+            device-tree-compiler wget xz-utils file \
+            libmagic1 libsdl2-dev
 
-          # west.yml: point to this module + upstream ZMK
-          cat > west.yml << 'WESTEOF'
+      - name: Install west
+        run: pip3 install west
+
+      - name: Initialize ZMK workspace with this module
+        run: |
+          mkdir -p zmk-workspace
+          cd zmk-workspace
+
+          cat > west.yml << WESTEOF
           manifest:
             projects:
               - name: zmk
@@ -69,16 +81,40 @@ jobs:
               path: config
           WESTEOF
 
-          # Init and update west
           west init -l .
           west update
 
-      - name: Create test keyboard shield + build
+      - name: Setup Zephyr SDK
         run: |
-          cd /workspace/config
+          cd /opt
+          SDK_VER=${{ env.ZEPHYR_SDK_VERSION }}
+          SDK_DIR="zephyr-sdk-${SDK_VER}"
+          if [ ! -d "${SDK_DIR}" ]; then
+            sudo wget -q \
+              "https://github.com/zephyrproject-rtos/sdk-ng/releases/download/v${SDK_VER}/zephyr-sdk-${SDK_VER}_linux-x86_64_minimal.tar.xz" \
+              -O sdk.tar.xz
+            sudo tar xf sdk.tar.xz -C /opt/
+            sudo rm sdk.tar.xz
+          fi
+          cd "${SDK_DIR}"
+          sudo ./setup.sh -t arm-zephyr-eabi -h -c
+          echo "ZEPHYR_SDK_INSTALL_DIR=/opt/${SDK_DIR}" >> $GITHUB_ENV
 
-          # --- Test shield definition ---
+      - name: Create test shield and build
+        run: |
+          cd zmk-workspace/config
+
+          # Create ESB test shield
           mkdir -p boards/shields/esb-test
+
+          # Kconfig.shield
+          cat > boards/shields/esb-test/Kconfig.shield << 'SHIELDEOF'
+          config SHIELD_ESB_TEST
+              def_bool $(shields_list_contains,esb-test)
+          SHIELDEOF
+
+          touch boards/shields/esb-test/CMakeLists.txt
+          echo "CONFIG_ZMK_ESB_ENDPOINT=y" > boards/shields/esb-test/shield.conf
 
           # .conf
           cat > boards/shields/esb-test/esb-test.conf << 'CONFEOF'
@@ -87,10 +123,9 @@ jobs:
           CONFIG_ZMK_ESB_ENDPOINT_SHELL_CMDS=y
           CONFIG_ZMK_ESB_ENDPOINT_CHANNEL_HOP=y
           CONFIG_ZMK_ESB_ENDPOINT_COOP_HOP=y
-          CONFIG_ZMK_ESB_ENDPOINT_LOG_LEVEL=3
           CONFEOF
 
-          # .overlay
+          # .overlay with ESB endpoint
           cat > boards/shields/esb-test/esb-test.overlay << 'DTSEOF'
           / {
               zmk_esb: zmk_esb_endpoint {
@@ -125,29 +160,16 @@ jobs:
           };
           KEYMAPEOF
 
-          # Kconfig.shield
-          cat > boards/shields/esb-test/Kconfig.shield << 'SHIELDEOF'
-          config SHIELD_ESB_TEST
-              def_bool $(shields_list_contains,esb-test)
-          SHIELDEOF
-
-          # CMakeLists.txt
-          touch boards/shields/esb-test/CMakeLists.txt
-
-          # shield.conf
-          echo "CONFIG_ZMK_ESB_ENDPOINT=y" > boards/shields/esb-test/shield.conf
-
-          # Build the test keyboard
-          mkdir -p /workspace/build
-          cd /workspace
+          # Build
+          cd ..
           west build -b nrf52833dk_nrf52833 -d build/test-nrf52833 \
             -S esb-test \
-            -- -DZMK_EXTRA_MODULES=/workspace/module
+            -- -DZMK_EXTRA_MODULES=${{ github.workspace }}/module
 
       - name: Upload firmware artifact
         uses: actions/upload-artifact@v4
         with:
           name: zmk-test-keyboard-nrf52833
-          path: /workspace/build/test-nrf52833/zephyr/zmk.uf2
+          path: zmk-workspace/build/test-nrf52833/zephyr/zmk.uf2
           if-no-files-found: warn
           retention-days: 7
