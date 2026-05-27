@@ -20,13 +20,18 @@ jobs:
         run: |
           sudo add-apt-repository ppa:deadsnakes/ppa -y
           sudo apt-get update
-          sudo apt-get install -y python3.12 python3.12-dev python3.12-venv python3.12-distutils
+          sudo apt-get install -y python3.12 python3.12-dev python3.12-venv
+
+      - name: Install setuptools for Python 3.12
+        run: |
+          python3.12 -m ensurepip
+          python3.12 -m pip install setuptools wheel
 
       - name: Install dependencies
         run: |
           sudo apt-get install -y --no-install-recommends \
             git cmake ninja-build gperf ccache dfu-util device-tree-compiler \
-            wget python3-pip python3-setuptools python3-wheel \
+            wget python3-pip \
             xz-utils file make gcc gcc-multilib g++-multilib libsdl2-dev
 
       - name: Install Python packages
@@ -71,13 +76,18 @@ jobs:
         run: |
           sudo add-apt-repository ppa:deadsnakes/ppa -y
           sudo apt-get update
-          sudo apt-get install -y python3.12 python3.12-dev python3.12-venv python3.12-distutils
+          sudo apt-get install -y python3.12 python3.12-dev python3.12-venv
+
+      - name: Install setuptools for Python 3.12
+        run: |
+          python3.12 -m ensurepip
+          python3.12 -m pip install setuptools wheel
 
       - name: Install dependencies
         run: |
           sudo apt-get install -y --no-install-recommends \
             git cmake ninja-build gperf ccache dfu-util device-tree-compiler \
-            wget python3-pip python3-setuptools python3-wheel \
+            wget python3-pip \
             xz-utils file make gcc gcc-multilib g++-multilib libsdl2-dev
 
       - name: Install Python packages
