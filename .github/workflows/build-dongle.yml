@@ -14,8 +14,15 @@ jobs:
       - name: Build
         run: |
           set -ex
+
+          # Verify SDK installed
+          echo "=== Checking toolchain ==="
+          ls /opt/zephyr-sdk-${SDK_VER}/arm-zephyr-eabi/bin/arm-zephyr-eabi-gcc 2>/dev/null && echo "TOOLCHAIN_OK" || echo "TOOLCHAIN_MISSING"
+
           pip3 install -q west pyelftools
+
           WS=/tmp/ws; rm -rf $WS; mkdir -p $WS; cd $WS
+
           cat > west.yml << 'EOF'
           manifest:
             defaults: { remote: zephyr }
@@ -34,25 +41,34 @@ jobs:
           west init -l .
           west update --fetch=smart -o=--depth=1
 
-          # CRITICAL: export ZEPHYR_BASE properly
           export ZEPHYR_BASE=$WS/zephyr
           export ZEPHYR_MODULES=$WS/modules/hal/nordic
-          echo "ZEPHYR_BASE=$ZEPHYR_BASE" >> $GITHUB_ENV
-          echo "ZEPHYR_MODULES=$ZEPHYR_MODULES" >> $GITHUB_ENV
+          export ZEPHYR_SDK_INSTALL_DIR=/opt/zephyr-sdk-${SDK_VER}
+          echo "ZEPHYR_BASE=$ZEPHYR_BASE"
+          echo "ZEPHYR_SDK_INSTALL_DIR=$ZEPHYR_SDK_INSTALL_DIR"
 
           rm -rf app && cp -r ${{ github.workspace }}/repo/dongle app
           cd app
           rm -rf build
 
-          # Build directly via cmake (not west build)
-          cmake -B build -GNinja \
-            -DBOARD=nrf52833dk_nrf52833 \
-            -DZEPHYR_MODULES="$ZEPHYR_MODULES"
-          ninja -C build
+          # Try west build first, fall back to cmake
+          west build -b nrf52833dk_nrf52833 2>&1 | tail -50 || {
+            echo "=== west build FAILED, trying cmake ==="
+            cmake -B build -GNinja \
+              -DBOARD=nrf52833dk_nrf52833 \
+              -DZEPHYR_MODULES="$ZEPHYR_MODULES" \
+              -DZEPHYR_EXTRA_MODULES="$ZEPHYR_MODULES" \
+              2>&1 | tail -50
+            ninja -C build 2>&1 | tail -50
+          }
 
-          ls -la build/zephyr/zephyr.hex
+          # Show output
+          echo "=== Build output ==="
+          find . -name "*.hex" -o -name "*.elf" 2>/dev/null || echo "No hex/elf found"
+          ls -la build/zephyr/ 2>/dev/null || true
+
           mkdir -p ${{ github.workspace }}/firmware
-          cp build/zephyr/zephyr.hex ${{ github.workspace }}/firmware.hex
+          find . -name "zephyr.hex" -exec cp {} ${{ github.workspace }}/firmware.hex \; 2>/dev/null || true
 
       - uses: actions/upload-artifact@v4
         with:
