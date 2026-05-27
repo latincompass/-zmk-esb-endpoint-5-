@@ -24,46 +24,50 @@ jobs:
       - name: Build
         run: |
           set -ex
-          WS=/tmp/ws; rm -rf $WS; mkdir -p $WS; cd $WS
+          WS=/tmp/ws
+          rm -rf $WS
+          mkdir -p $WS && cd $WS
 
           cat > west.yml << 'EOF'
-          manifest:
-            defaults: { remote: zmkfirmware }
-            remotes:
-              - name: zmkfirmware
-                url-base: https://github.com/zmkfirmware
-              - name: zephyr
-                url-base: https://github.com/zephyrproject-rtos
-            projects:
-              - name: zmk
-                revision: main
-              - name: zephyr
-                remote: zephyr
-                revision: v3.7.0
-                west-commands: scripts/west-commands.yml
-              - name: hal_nordic
-                remote: zephyr
-                revision: master
-                path: modules/hal/nordic
-            self: { path: config }
-          EOF
-          west init -l . && west update --fetch=smart -o=--depth=1
+manifest:
+  defaults:
+    remote: zmkfirmware
+  remotes:
+    - name: zmkfirmware
+      url-base: https://github.com/zmkfirmware
+    - name: zephyr
+      url-base: https://github.com/zephyrproject-rtos
+  projects:
+    - name: zmk
+      revision: main
+    - name: zephyr
+      remote: zephyr
+      revision: v3.7.0
+      west-commands: scripts/west-commands.yml
+    - name: hal_nordic
+      remote: zephyr
+      revision: master
+      path: modules/hal/nordic
+  self:
+    path: config
+EOF
+          west init -l .
+          west update --fetch=smart -o=--depth=1
 
-          mkdir -p modules/esb-ep && cp -r ${{ github.workspace }}/repo/* modules/esb-ep/
+          mkdir -p modules/esb-ep
+          cp -r ${{ github.workspace }}/repo/* modules/esb-ep/
           echo "CONFIG_ZMK_ESB_ENDPOINT=y" > config/nrf52833dk_nrf52833.conf
 
-          cd zmk/app && rm -rf /tmp/ws/build
+          cd zmk/app
+          rm -rf /tmp/ws/build
           west build -b nrf52833dk_nrf52833 -d /tmp/ws/build \
-            -- -DZMK_CONFIG=/tmp/ws/config -DZMK_EXTRA_MODULES=/tmp/ws/modules/esb-ep
-
-          # Find firmware
-          echo "=== Searching for firmware ==="
-          find /tmp/ws/build -name "*.hex" -o -name "*.uf2" -o -name "*.bin" -o -name "*.elf" 2>/dev/null
-          ls -la /tmp/ws/build/zephyr/ 2>/dev/null || true
+            -- -DZMK_CONFIG=/tmp/ws/config \
+               -DZMK_EXTRA_MODULES=/tmp/ws/modules/esb-ep
 
           mkdir -p ${{ github.workspace }}/firmware
           for ext in hex uf2 bin elf; do
-            find /tmp/ws/build -name "zephyr.$ext" -exec cp {} ${{ github.workspace }}/firmware.$ext \; 2>/dev/null || true
+            f=$(find /tmp/ws/build -name "zephyr.$ext" 2>/dev/null | head -1)
+            [ -n "$f" ] && cp "$f" ${{ github.workspace }}/firmware.$ext
           done
 
       - uses: actions/upload-artifact@v4
