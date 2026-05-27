@@ -32,11 +32,11 @@ jobs:
         run: |
           python3.10 -m pip install -i https://pypi.tuna.tsinghua.edu.cn/simple west pyelftools
 
-      - name: Install Zephyr SDK 0.15.2
+      - name: Install Zephyr SDK 0.15.1
         run: |
-          wget --no-check-certificate https://github.com/zephyrproject-rtos/sdk-ng/releases/download/v0.15.2/zephyr-sdk-0.15.2_linux-x86_64.tar.xz
-          tar xvf zephyr-sdk-0.15.2_linux-x86_64.tar.xz
-          sudo ./zephyr-sdk-0.15.2/setup.sh -t all -h -c
+          wget --no-check-certificate https://github.com/zephyrproject-rtos/sdk-ng/releases/download/v0.15.1/zephyr-sdk-0.15.1_linux-x86_64.tar.xz
+          tar xvf zephyr-sdk-0.15.1_linux-x86_64.tar.xz
+          sudo ./zephyr-sdk-0.15.1/setup.sh -t all -h -c
 
       - name: Build dongle firmware
         working-directory: dongle
@@ -82,11 +82,11 @@ jobs:
         run: |
           python3.10 -m pip install -i https://pypi.tuna.tsinghua.edu.cn/simple west pyelftools
 
-      - name: Install Zephyr SDK 0.15.2
+      - name: Install Zephyr SDK 0.15.1
         run: |
-          wget --no-check-certificate https://github.com/zephyrproject-rtos/sdk-ng/releases/download/v0.15.2/zephyr-sdk-0.15.2_linux-x86_64.tar.xz
-          tar xvf zephyr-sdk-0.15.2_linux-x86_64.tar.xz
-          sudo ./zephyr-sdk-0.15.2/setup.sh -t all -h -c
+          wget --no-check-certificate https://github.com/zephyrproject-rtos/sdk-ng/releases/download/v0.15.1/zephyr-sdk-0.15.1_linux-x86_64.tar.xz
+          tar xvf zephyr-sdk-0.15.1_linux-x86_64.tar.xz
+          sudo ./zephyr-sdk-0.15.1/setup.sh -t all -h -c
 
       - name: Setup ZMK workspace
         run: |
