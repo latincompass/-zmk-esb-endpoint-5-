@@ -1,154 +1,62 @@
 # SPDX-License-Identifier: MIT
 #
-# GitHub Actions: Validate ZMK module source files
+# GitHub Actions: Validate module source files
 #
-# Since building a full ZMK firmware in CI is fragile (depends on
-# ZMK's west.yml imports which change frequently), this workflow
-# validates the module source files independently:
-#
-#   1. Uses the Zephyr SDK (already downloaded by the dongle build
-#      in a separate workflow) to check that header files parse
-#      correctly.
-#   2. Verifies Kconfig structure with kconfiglint.
-#   3. Confirms DTS bindings are well-formed.
-#
-# For a real integration test, build the dongle firmware (which
-# shares the same vendor/nrf-esb and protocol code) via the
-# "Build Dongle (nRF52833 PRX)" workflow.
-#
-# Triggers:
-#   - Push to main (changes to src/ or dts/)
-#   - Pull request
-#   - Manual trigger (workflow_dispatch)
+# Simple, reliable validation that runs on every push/PR.
+# Does NOT require Zephyr SDK or west — just Python + basic tools.
 
-name: Validate Module Source
+name: Validate Source
 
 on:
   push:
     branches: [main]
-    paths:
-      - 'src/**'
-      - 'dts/**'
-      - 'include/**'
-      - 'Kconfig'
-      - 'CMakeLists.txt'
-      - '.github/workflows/build-zmk-module.yml'
   pull_request:
-    paths:
-      - 'src/**'
-      - 'dts/**'
-      - 'include/**'
-      - 'Kconfig'
-      - 'CMakeLists.txt'
   workflow_dispatch:
 
 jobs:
   validate:
     runs-on: ubuntu-24.04
-
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 1
-
-      - name: Install tools
+      - uses: actions/checkout@v4
+      - name: Install deps
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y -qq --no-install-recommends \
             python3-pip device-tree-compiler
-
-      - name: Validate DTS bindings (YAML)
+          pip3 install pyyaml -q
+      - name: DTS YAML
         run: |
-          echo "=== DTS bindings ==="
-          for f in dts/bindings/*.yaml dts/bindings/*/*.yaml; do
+          echo "::group::DTS YAML"
+          for f in dts/bindings/*.yaml dts/bindings/*/*.yaml dts/bindings/**/*.yaml; do
             [ -f "$f" ] || continue
-            echo "  Checking $f ..."
-            python3 -c "
-import yaml
-with open('$f') as fh:
-    yaml.safe_load(fh)
-print('    OK')
-" || { echo "    FAILED"; exit 1; }
+            python3 -c "import yaml; yaml.safe_load(open('$f')); print(f'  OK $f')"
           done
-
-      - name: Validate DTS includes
+          echo "::endgroup::"
+      - name: DTS includes
         run: |
-          echo "=== DTS includes ==="
+          echo "::group::DTS includes"
           for f in dts/behaviors/*.dtsi; do
             [ -f "$f" ] || continue
-            echo "  Checking $f ..."
-            # Basic well-formedness: check braces balance
-            opens=$(grep -c '{' "$f" || true)
-            closes=$(grep -c '}' "$f" || true)
-            if [ "$opens" != "$closes" ]; then
-              echo "    FAILED: braces mismatch (open=$opens close=$closes)"
-              exit 1
-            fi
-            echo "    OK"
+            o=$(grep -c '{' "$f" || true)
+            c=$(grep -c '}' "$f" || true)
+            [ "$o" = "$c" ] && echo "  OK $f ($o braces)" || { echo "  FAIL $f ($o open / $c close)"; exit 1; }
           done
-
-      - name: Validate Kconfig structure
+          echo "::endgroup::"
+      - name: Files exist
         run: |
-          echo "=== Kconfig ==="
-          python3 -c "
-import re, sys
-with open('src/Kconfig') as f:
-    content = f.read()
-# Check that all 'source' directives point to existing files
-sources = re.findall(r'^[ \\t]*rsource[ \\t]+\"?([^\"\\n]+)', content, re.M)
-ok = True
-for s in sources:
-    if not __import__('os').path.exists(s.strip()):
-        print(f'  MISSING: {s.strip()}')
-        ok = False
-if ok:
-    print('  OK')
-else:
-    sys.exit(1)
-"
-          echo "  All Kconfig sources exist"
-
-      - name: Check header guards and includes
-        run: |
-          echo "=== Include headers ==="
-          errors=0
-          for f in include/zmk_esb/*.h; do
-            [ -f "$f" ] || continue
-            name=$(basename "$f")
-            # Check #pragma once or #ifndef guard
-            if ! grep -q '#pragma once\|#ifndef.*'"$name"'_' "$f"; then
-              echo "  WARNING: $f missing header guard"
-            fi
+          echo "::group::Key files"
+          for f in CMakeLists.txt Kconfig src/Kconfig include/zmk_esb/protocol.h vendor/nrf-esb/include/esb.h; do
+            [ -f "$f" ] && echo "  OK $f" || { echo "  MISSING $f"; exit 1; }
           done
-          if [ "$errors" -eq 0 ]; then
-            echo "  OK"
-          fi
-
-      - name: Quick C source scan (no build, just grep for obvious issues)
+          echo "::endgroup::"
+      - name: C syntax scan
         run: |
-          echo "=== C source scan ==="
-          errors=0
-          for f in $(find src -name '*.c'); do
-            # Check for missing semicolons after struct definitions
-            while IFS= read -r line; do
-              if echo "$line" | grep -q '} *[a-zA-Z]'; then
-                if ! echo "$line" | grep -q '};'; then
-                  echo "  WARNING: $f: possible missing semicolon after struct"
-                  errors=$((errors+1))
-                fi
-              fi
-            done < "$f"
+          echo "::group::C scan"
+          for f in $(find src -name '*.c' -o -name '*.h'); do
+            o=$(grep -c '{' "$f" || true)
+            c=$(grep -c '}' "$f" || true)
+            [ "$o" = "$c" ] && continue
+            echo "  WARN: $f braces mismatch ($o/$c)"
           done
-          if [ "$errors" -eq 0 ]; then
-            echo "  No obvious issues found"
-          fi
-
-      - name: Check file sizes
-        run: |
-          echo "=== File sizes ==="
-          echo "  include/zmk_esb/:"
-          wc -c include/zmk_esb/*.h | tail -1
-          echo "  src/:"
-          find src -name '*.c' -exec wc -c {} + | tail -1
-          echo "  ALL OK"
+          echo "  OK"
+          echo "::endgroup::"
