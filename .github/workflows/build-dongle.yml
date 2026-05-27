@@ -1,0 +1,101 @@
+# SPDX-License-Identifier: MIT
+#
+# GitHub Actions: Build nRF52833 ESB Dongle Firmware
+#
+# Triggers:
+#   - Push to main branch (changes to dongle/ or vendor/)
+#   - Pull request (changes to dongle/ or vendor/)
+#   - Manual trigger (workflow_dispatch)
+#
+# Builds the dongle firmware for nRF52833 and uploads the resulting
+# .hex file as a build artifact.
+
+name: Build Dongle (nRF52833 PRX)
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'dongle/**'
+      - 'vendor/nrf-esb/**'
+      - '.github/workflows/build-dongle.yml'
+  pull_request:
+    paths:
+      - 'dongle/**'
+      - 'vendor/nrf-esb/**'
+  workflow_dispatch:
+
+env:
+  WEST_WORKDIR: ${{ github.workspace }}/zephyr-workspace
+  ZEPHYR_SDK_VERSION: 0.16.8
+
+jobs:
+  build-dongle:
+    runs-on: ubuntu-24.04
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          path: zmk-esb-endpoint
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq --no-install-recommends \
+            python3-pip python3-venv python3-dev \
+            cmake ninja-build gperf ccache dfu-util \
+            device-tree-compiler wget xz-utils file \
+            libmagic1 libsdl2-dev
+
+      - name: Setup Python venv
+        run: |
+          python3 -m venv ${{ env.WEST_WORKDIR }}/.venv
+          echo "${{ env.WEST_WORKDIR }}/.venv/bin" >> $GITHUB_PATH
+
+      - name: Install west
+        run: pip3 install west
+
+      - name: Initialize west workspace
+        run: |
+          mkdir -p "${{ env.WEST_WORKDIR }}"
+          cd "${{ env.WEST_WORKDIR }}"
+          # Copy the dongle's west.yml as the workspace manifest
+          cp "${{ github.workspace }}/zmk-esb-endpoint/dongle/west.yml" west.yml
+          west init -l .
+          west update
+
+      - name: Setup Zephyr SDK
+        run: |
+          cd /opt
+          if [ ! -d zephyr-sdk-${{ env.ZEPHYR_SDK_VERSION }} ]; then
+            sudo wget -q \
+              https://github.com/zephyrproject-rtos/sdk-ng/releases/download/v${{ env.ZEPHYR_SDK_VERSION }}/zephyr-sdk-${{ env.ZEPHYR_SDK_VERSION }}_linux-x86_64_minimal.tar.xz
+            sudo tar xf zephyr-sdk-${{ env.ZEPHYR_SDK_VERSION }}_linux-x86_64_minimal.tar.xz
+            sudo rm zephyr-sdk-${{ env.ZEPHYR_SDK_VERSION }}_linux-x86_64_minimal.tar.xz
+          fi
+          # Only install the ARM toolchain (nRF52833 is Cortex-M4)
+          cd zephyr-sdk-${{ env.ZEPHYR_SDK_VERSION }}
+          sudo ./setup.sh -t arm-zephyr-eabi -h -c
+          echo "ZEPHYR_SDK_INSTALL_DIR=/opt/zephyr-sdk-${{ env.ZEPHYR_SDK_VERSION }}" >> $GITHUB_ENV
+
+      - name: Build dongle firmware
+        run: |
+          source "${{ env.WEST_WORKDIR }}/zephyr/zephyr-env.sh"
+          # Symlink the dongle source into the west app dir
+          rm -rf "${{ env.WEST_WORKDIR }}/app"
+          ln -s "${{ github.workspace }}/zmk-esb-endpoint/dongle" "${{ env.WEST_WORKDIR }}/app"
+          cd "${{ env.WEST_WORKDIR }}"
+          west build -b nrf52833dk_nrf52833 -s app
+          cp build/zephyr/zephyr.hex "${{ github.workspace }}/zmk-esb-endpoint/dongle/build/"
+          cp build/zephyr/zephyr.map "${{ github.workspace }}/zmk-esb-endpoint/dongle/build/"
+
+      - name: Upload dongle firmware artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: zmk-esb-dongle-nrf52833
+          path: |
+            zmk-esb-endpoint/dongle/build/zephyr.hex
+            zmk-esb-endpoint/dongle/build/zephyr.map
+          if-no-files-found: error
+          retention-days: 30

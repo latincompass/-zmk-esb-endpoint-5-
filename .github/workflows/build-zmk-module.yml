@@ -1,0 +1,164 @@
+# SPDX-License-Identifier: MIT
+#
+# GitHub Actions: Validate ZMK module integration
+#
+# Tests that the zmk-esb-endpoint module builds correctly as part of
+# a ZMK firmware. Uses the nRF52833 DK as a reference board.
+#
+# Triggers:
+#   - Push to main (changes to src/ or dts/)
+#   - Pull request
+#   - Manual trigger
+
+name: Test ZMK Module Integration
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'src/**'
+      - 'dts/**'
+      - 'include/**'
+      - 'Kconfig'
+      - 'CMakeLists.txt'
+      - '.github/workflows/build-zmk-module.yml'
+  pull_request:
+    paths:
+      - 'src/**'
+      - 'dts/**'
+      - 'include/**'
+      - 'Kconfig'
+      - 'CMakeLists.txt'
+  workflow_dispatch:
+
+env:
+  ZMK_REF: main
+
+jobs:
+  build-zmk:
+    runs-on: ubuntu-24.04
+
+    steps:
+      - name: Checkout this module
+        uses: actions/checkout@v4
+        with:
+          path: module
+          fetch-depth: 1
+
+      - name: Setup ZMK workspace
+        run: |
+          mkdir -p zmk-workspace
+          cd zmk-workspace
+
+          # Create west.yml with this module and ZMK
+          cat > west.yml << 'WESTEOF'
+          manifest:
+            projects:
+              - name: zmk
+                url: https://github.com/zmkfirmware/zmk
+                revision: ${{ env.ZMK_REF }}
+                import: true
+              - name: zmk-esb-endpoint
+                url: https://github.com/${{ github.repository }}
+                revision: ${{ github.sha }}
+                path: modules/esb
+                submodules: true
+            self:
+              path: config
+          WESTEOF
+
+          # Download ZMK and dependencies via west
+          pip3 install west
+          west init -l .
+          west update
+
+      - name: Install Zephyr SDK (via ZMK's setup action)
+        uses: zmkfirmware/zmk-setup-action@v2
+        with:
+          cache-prefix: zmk-esb-endpoint
+
+      - name: Build reference keyboard (nRF52833 DK)
+        run: |
+          cd zmk-workspace
+
+          # Create a minimal .conf that enables the ESB endpoint
+          mkdir -p config/boards/shields/esb-test
+          cat > config/boards/shields/esb-test/esb-test.conf << 'CONFEOF'
+          CONFIG_ZMK_ESB_ENDPOINT=y
+          CONFIG_ZMK_ESB_BEHAVIOR_UNPAIR=y
+          CONFIG_ZMK_ESB_ENDPOINT_SHELL_CMDS=y
+          CONFIG_ZMK_ESB_ENDPOINT_CHANNEL_HOP=y
+          CONFIG_ZMK_ESB_ENDPOINT_COOP_HOP=y
+          CONFIG_ZMK_ESB_ENDPOINT_LOG_LEVEL=3
+          CONFEOF
+
+          # Create .overlay with ESB endpoint nodes
+          cat > config/boards/shields/esb-test/esb-test.overlay << 'DTSEOF'
+          / {
+              zmk_esb: zmk_esb_endpoint {
+                  compatible = "zmk,esb-endpoint";
+                  esb-channel = <78>;
+                  pairing-base-address = [17 f4 07 aa];
+                  pairing-prefix = <0x24>;
+                  data-base-address = [b9 8a 16 22];
+                  data-prefix = <0xc2>;
+              };
+              esb_ip: esb_input_processor {
+                  compatible = "zmk,esb-input-processor";
+                  #input-processor-cells = <0>;
+                  status = "okay";
+              };
+          };
+          &mkp_input_listener { input-processors = <&esb_ip>; };
+          &msc_input_listener { input-processors = <&esb_ip>; };
+          DTSEOF
+
+          # Create minimal keymap
+          cat > config/boards/shields/esb-test/esb-test.keymap << 'KEYMAPEOF'
+          #include <behaviors.dtsi>
+          #include <dt-bindings/zmk/keys.h>
+          / {
+              keymap {
+                  compatible = "zmk,keymap";
+                  default_layer {
+                      bindings = <&kp A &kp B &kp C>;
+                  };
+              };
+          };
+          KEYMAPEOF
+
+          # Create shield definition
+          mkdir -p config/boards/shields/esb-test
+          cat > config/boards/shields/esb-test/Kconfig.shield << 'SHIELDEOF'
+          config SHIELD_ESB_TEST
+              def_bool $(shields_list_contains,esb-test)
+          SHIELDEOF
+
+          cat > config/boards/shields/esb-test/CMakeLists.txt << 'SHIELDEMPTY'
+          # empty
+          SHIELDEMPTY
+
+          cat > config/boards/shields/esb-test/shield.conf << 'SHIELDCONF'
+          CONFIG_ZMK_ESB_ENDPOINT=y
+          SHIELDCONF
+
+          cat > config/boards/shields/esb-test/esb-test_defconfig << 'BOARDDEF'
+          # SPDX-License-Identifier: MIT
+          if SHIELD_ESB_TEST
+          config ZMK_KEYBOARD_NAME
+              default "ESB Test"
+          endif
+          BOARDDEF
+
+          # Build for nRF52833 DK with the test shield
+          west build -b nrf52833dk_nrf52833 -d build/test-nrf52833 \
+            -S esb-test \
+            -- -DZMK_EXTRA_MODULES="${{ github.workspace }}/module"
+
+      - name: Upload firmware artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: zmk-test-keyboard-nrf52833
+          path: zmk-workspace/build/test-nrf52833/zephyr/zmk.uf2
+          if-no-files-found: warn
+          retention-days: 7
