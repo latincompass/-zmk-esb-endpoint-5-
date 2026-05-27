@@ -10,6 +10,7 @@ on:
 jobs:
   build-dongle:
     runs-on: ubuntu-24.04
+    name: Build ESB Dongle
     steps:
       - uses: actions/checkout@v4
         with:
@@ -27,14 +28,20 @@ jobs:
           west update --narrow -o=--depth=1
           west build -b nrf52833dk_nrf52833 -p auto .
 
+      - name: Check built files
+        run: ls -la dongle/build/zephyr/
+
       - name: Upload dongle hex
         uses: actions/upload-artifact@v4
         with:
           name: dongle-nrf52833dk
-          path: dongle/build/zephyr/zephyr.hex
+          path: |
+            dongle/build/zephyr/zephyr.hex
+            dongle/build/zephyr/zephyr.bin
 
   build-keyboard:
     runs-on: ubuntu-24.04
+    name: Build Keyboard
     steps:
       - uses: actions/checkout@v4
         with:
@@ -78,8 +85,13 @@ jobs:
           west update --narrow -o=--depth=1
           west build -b nrf52833dk_nrf52833 -p auto zmk/app -- -DZMK_CONFIG=${PWD}/config
 
+      - name: Check built files
+        run: ls -la zmk-config/build/zephyr/
+
       - name: Upload keyboard hex
         uses: actions/upload-artifact@v4
         with:
           name: keyboard-hhkb-nrf52833dk
-          path: zmk-config/build/zephyr/zephyr.hex
+          path: |
+            zmk-config/build/zephyr/zephyr.hex
+            zmk-config/build/zephyr/zephyr.bin
