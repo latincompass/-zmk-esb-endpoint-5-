@@ -5,17 +5,17 @@ on: [workflow_dispatch, push]
 jobs:
   dongle:
     runs-on: ubuntu-24.04
-    container:
-      image: ghcr.io/zephyrproject-rtos/zephyr-build:latest
     steps:
       - uses: actions/checkout@v4
         with: { path: repo }
+      - run: sudo apt-get update -qq && sudo apt-get install -y -qq python3-pip cmake ninja-build device-tree-compiler wget xz-utils
+      - run: pip3 install west -q
 
       - name: Build
         run: |
           set -ex
-          WS=/tmp/ws
-          rm -rf $WS && mkdir -p $WS && cd $WS
+          pip3 install -q west pyelftools
+          WS=/tmp/ws; rm -rf $WS; mkdir -p $WS; cd $WS
           cat > west.yml << 'EOF'
           manifest:
             defaults: { remote: zephyr }
@@ -33,9 +33,23 @@ jobs:
           EOF
           west init -l .
           west update --fetch=smart -o=--depth=1
+
+          # CRITICAL: export ZEPHYR_BASE properly
+          export ZEPHYR_BASE=$WS/zephyr
+          export ZEPHYR_MODULES=$WS/modules/hal/nordic
+          echo "ZEPHYR_BASE=$ZEPHYR_BASE" >> $GITHUB_ENV
+          echo "ZEPHYR_MODULES=$ZEPHYR_MODULES" >> $GITHUB_ENV
+
           rm -rf app && cp -r ${{ github.workspace }}/repo/dongle app
-          cd app && rm -rf build
-          west build -b nrf52833dk_nrf52833
+          cd app
+          rm -rf build
+
+          # Build directly via cmake (not west build)
+          cmake -B build -GNinja \
+            -DBOARD=nrf52833dk_nrf52833 \
+            -DZEPHYR_MODULES="$ZEPHYR_MODULES"
+          ninja -C build
+
           ls -la build/zephyr/zephyr.hex
           mkdir -p ${{ github.workspace }}/firmware
           cp build/zephyr/zephyr.hex ${{ github.workspace }}/firmware.hex
