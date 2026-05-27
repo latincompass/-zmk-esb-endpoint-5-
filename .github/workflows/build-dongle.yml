@@ -1,8 +1,5 @@
 # SPDX-License-Identifier: MIT
-# Build: nRF52833 ESB Dongle (.hex)
-
 name: 🔌 Build Dongle
-
 on:
   workflow_dispatch:
   push: { branches: [main] }
@@ -18,51 +15,63 @@ jobs:
         with: { path: repo }
 
       - run: sudo apt-get update -qq && sudo apt-get install -y -qq python3-pip cmake ninja-build device-tree-compiler wget xz-utils
-      - run: pip3 install west -q
 
-      - name: SDK
+      - name: 🛠 Install west + SDK
         run: |
+          pip3 install west -q
           cd /opt
-          sudo wget -q "https://github.com/zephyrproject-rtos/sdk-ng/releases/download/v${SDK_VER}/zephyr-sdk-${SDK_VER}_linux-x86_64_minimal.tar.xz"
-          sudo tar xf zephyr-sdk-${SDK_VER}_linux-x86_64_minimal.tar.xz && sudo rm *.tar.xz
-          cd zephyr-sdk-${SDK_VER} && sudo ./setup.sh -t arm-zephyr-eabi -h
+          wget -q "https://github.com/zephyrproject-rtos/sdk-ng/releases/download/v${SDK_VER}/zephyr-sdk-${SDK_VER}_linux-x86_64_minimal.tar.xz"
+          tar xf zephyr-sdk-${SDK_VER}_linux-x86_64_minimal.tar.xz && rm *.tar.xz
+          cd zephyr-sdk-${SDK_VER} && ./setup.sh -t arm-zephyr-eabi -h
 
-      - name: Clone Zephyr + build
+      - name: 📦 Clone + Build Dongle
+        shell: bash
         run: |
           set -ex
 
-          # Clone zephyr and modules
-          mkdir -p /opt/zephyr/modules/hal
-          git clone --depth=1 --branch v3.7.0 https://github.com/zephyrproject-rtos/zephyr /opt/zephyr/zephyr
-          git clone --depth=1 https://github.com/zephyrproject-rtos/hal_nordic /opt/zephyr/modules/hal/nordic
-          git clone --depth=1 https://github.com/zephyrproject-rtos/cmsis /opt/zephyr/modules/hal/cmsis
+          # Create a proper west workspace
+          WS=/tmp/ws
+          mkdir -p $WS
+          cd $WS
 
-          export ZEPHYR_BASE=/opt/zephyr/zephyr
-          export ZEPHYR_MODULES="/opt/zephyr/modules/hal/nordic;/opt/zephyr/modules/hal/cmsis"
-          export ZEPHYR_SDK_INSTALL_DIR=/opt/zephyr-sdk-${SDK_VER}
-          source "$ZEPHYR_BASE/zephyr-env.sh"
+          # west manifest: 3 projects only
+          cat > west.yml << 'EOF'
+          manifest:
+            defaults:
+              remote: zephyr
+            remotes:
+              - name: zephyr
+                url-base: https://github.com/zephyrproject-rtos
+            projects:
+              - name: zephyr
+                revision: v3.7.0
+                west-commands: scripts/west-commands.yml
+              - name: hal_nordic
+                revision: master
+                path: modules/hal/nordic
+            self:
+              path: app
+          EOF
 
-          # Build using west from Zephyr app dir
-          cd /opt/zephyr
-          west init -l zephyr 2>/dev/null || true
-          cd ${{ github.workspace }}/repo/dongle
+          # Init workspace
+          west init -l $WS
+          west update --fetch=smart -o=--depth=1
+
+          # Replace empty app/ with our dongle code
+          rm -rf $WS/app
+          cp -r ${{ github.workspace }}/repo/dongle $WS/app
+
+          # Build!
+          cd $WS/app
           west build -b nrf52833dk_nrf52833
 
-          echo "=== Build output ==="
-          ls -la build/zephyr/zephyr.hex 2>/dev/null && echo "HEX FOUND" || echo "NO HEX"
+          # Verify output
+          echo "=== BUILD OUTPUT ==="
+          ls -la build/zephyr/zephyr.hex
 
-      - name: Upload firmware
-        run: |
-          if [ -f ${{ github.workspace }}/repo/dongle/build/zephyr/zephyr.hex ]; then
-            mkdir -p ${{ github.workspace }}/firmware
-            cp ${{ github.workspace }}/repo/dongle/build/zephyr/zephyr.hex ${{ github.workspace }}/firmware/zmk-esb-dongle-nrf52833.hex
-            echo "firmware file size:"
-            ls -lh ${{ github.workspace }}/firmware/zmk-esb-dongle-nrf52833.hex
-          else
-            echo "ERROR: No hex file produced!"
-            find ${{ github.workspace }}/repo/dongle/build -name "*.hex" -o -name "*.elf" 2>/dev/null || true
-            exit 1
-          fi
+          # Copy to upload location
+          mkdir -p ${{ github.workspace }}/firmware
+          cp build/zephyr/zephyr.hex ${{ github.workspace }}/firmware/zmk-esb-dongle-nrf52833.hex
 
       - uses: actions/upload-artifact@v4
         with:
