@@ -24,14 +24,14 @@ jobs:
       - name: Build
         run: |
           set -ex
+
           WS=/tmp/ws
           rm -rf $WS
           mkdir -p $WS && cd $WS
 
           cat > west.yml << 'EOF'
 manifest:
-  defaults:
-    remote: zmkfirmware
+  defaults: { remote: zmkfirmware }
   remotes:
     - name: zmkfirmware
       url-base: https://github.com/zmkfirmware
@@ -48,31 +48,38 @@ manifest:
       remote: zephyr
       revision: master
       path: modules/hal/nordic
-  self:
-    path: config
+  self: { path: config }
 EOF
           west init -l .
           west update --fetch=smart -o=--depth=1
 
+          # Copy ESB module
           mkdir -p modules/esb-ep
           cp -r ${{ github.workspace }}/repo/* modules/esb-ep/
+
+          # Create ZMK config
           echo "CONFIG_ZMK_ESB_ENDPOINT=y" > config/nrf52833dk_nrf52833.conf
 
+          # CRITICAL: source zephyr-env before build
+          export ZEPHYR_BASE=$WS/zephyr
+          source $ZEPHYR_BASE/zephyr-env.sh
+
+          # Build from ZMK app (NO pipe, don't hide errors)
           cd zmk/app
           rm -rf /tmp/ws/build
           west build -b nrf52833dk_nrf52833 -d /tmp/ws/build \
             -- -DZMK_CONFIG=/tmp/ws/config \
                -DZMK_EXTRA_MODULES=/tmp/ws/modules/esb-ep
 
+          echo "=== CHECKING OUTPUT ==="
+          ls -la /tmp/ws/build/zephyr/zephyr.hex
+
           mkdir -p ${{ github.workspace }}/firmware
-          for ext in hex uf2 bin elf; do
-            f=$(find /tmp/ws/build -name "zephyr.$ext" 2>/dev/null | head -1)
-            [ -n "$f" ] && cp "$f" ${{ github.workspace }}/firmware.$ext
-          done
+          cp /tmp/ws/build/zephyr/zephyr.hex ${{ github.workspace }}/firmware.hex
 
       - uses: actions/upload-artifact@v4
         with:
           name: zmk-esb-keyboard-nrf52833
-          path: ${{ github.workspace }}/firmware.*
-          if-no-files-found: warn
+          path: ${{ github.workspace }}/firmware.hex
+          if-no-files-found: error
           retention-days: 30

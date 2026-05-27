@@ -2,6 +2,9 @@
 name: 🔌 Build Dongle
 on: [workflow_dispatch, push]
 
+env:
+  SDK_VER: 0.16.8
+
 jobs:
   dongle:
     runs-on: ubuntu-24.04
@@ -11,82 +14,62 @@ jobs:
       - run: sudo apt-get update -qq && sudo apt-get install -y -qq python3-pip cmake ninja-build device-tree-compiler wget xz-utils
       - run: pip3 install west -q
 
+      - name: SDK
+        run: |
+          cd /opt
+          wget -q "https://github.com/zephyrproject-rtos/sdk-ng/releases/download/v${SDK_VER}/zephyr-sdk-${SDK_VER}_linux-x86_64_minimal.tar.xz"
+          tar xf zephyr-sdk-${SDK_VER}_linux-x86_64_minimal.tar.xz && rm *.tar.xz
+          cd zephyr-sdk-${SDK_VER} && ./setup.sh -t arm-zephyr-eabi -h
+
       - name: Build
         run: |
           set -ex
 
-          # Verify SDK installed
-          echo "=== Checking toolchain ==="
-          ls /opt/zephyr-sdk-${SDK_VER}/arm-zephyr-eabi/bin/arm-zephyr-eabi-gcc 2>/dev/null && echo "TOOLCHAIN_OK" || echo "TOOLCHAIN_MISSING"
-
-          pip3 install -q west pyelftools
-
-          WS=/tmp/ws; rm -rf $WS; mkdir -p $WS; cd $WS
+          # Create workspace
+          WS=/tmp/ws
+          rm -rf $WS
+          mkdir -p $WS && cd $WS
 
           cat > west.yml << 'EOF'
-          manifest:
-            defaults: { remote: zephyr }
-            remotes:
-              - name: zephyr
-                url-base: https://github.com/zephyrproject-rtos
-            projects:
-              - name: zephyr
-                revision: v3.7.0
-                west-commands: scripts/west-commands.yml
-              - name: hal_nordic
-                revision: master
-                path: modules/hal/nordic
-            self: { path: app }
-          EOF
+manifest:
+  defaults: { remote: zephyr }
+  remotes:
+    - name: zephyr
+      url-base: https://github.com/zephyrproject-rtos
+  projects:
+    - name: zephyr
+      revision: v3.7.0
+      west-commands: scripts/west-commands.yml
+    - name: hal_nordic
+      revision: master
+      path: modules/hal/nordic
+  self: { path: app }
+EOF
           west init -l .
           west update --fetch=smart -o=--depth=1
 
-          export ZEPHYR_BASE=$WS/zephyr
-          export ZEPHYR_MODULES=$WS/modules/hal/nordic
-          export ZEPHYR_SDK_INSTALL_DIR=/opt/zephyr-sdk-${SDK_VER}
-          echo "ZEPHYR_BASE=$ZEPHYR_BASE"
-          echo "ZEPHYR_SDK_INSTALL_DIR=$ZEPHYR_SDK_INSTALL_DIR"
+          # Put dongle source in app dir
+          rm -rf app
+          cp -r ${{ github.workspace }}/repo/dongle app
 
-          rm -rf app && cp -r ${{ github.workspace }}/repo/dongle app
+          # CRITICAL: set Zephyr env BEFORE west build
+          export ZEPHYR_BASE=$WS/zephyr
+          source $ZEPHYR_BASE/zephyr-env.sh
+
+          # Build (NO pipe to tail - don't hide errors!)
           cd app
           rm -rf build
+          west build -b nrf52833dk_nrf52833
 
-          # Try west build first, fall back to cmake
-          west build -b nrf52833dk_nrf52833 2>&1 | tail -50 || {
-            echo "=== west build FAILED, trying cmake ==="
-            cmake -B build -GNinja \
-              -DBOARD=nrf52833dk_nrf52833 \
-              -DZEPHYR_MODULES="$ZEPHYR_MODULES" \
-              -DZEPHYR_EXTRA_MODULES="$ZEPHYR_MODULES" \
-              2>&1 | tail -50
-            ninja -C build 2>&1 | tail -50
-          }
+          echo "=== CHECKING OUTPUT ==="
+          ls -la build/zephyr/zephyr.hex
 
-          # Show ALL output files
-          echo "=== ALL BUILD OUTPUT FILES ==="
-          find /tmp/ws/app -name "*.hex" -o -name "*.bin" -o -name "*.elf" -o -name "*.uf2" 2>/dev/null
-          echo "=== Build/zephyr directory ==="
-          ls -la /tmp/ws/app/build/zephyr/ 2>/dev/null || echo "No build/zephyr dir"
-          echo "=== All build dirs ==="
-          find /tmp/ws/app -type d -name "build*" 2>/dev/null
-          echo "=== Searching anywhere for hex ==="
-          find /tmp/ws -name "zephyr.hex" 2>/dev/null || echo "NO HEX FOUND ANYWHERE"
-
-          # Copy firmware
           mkdir -p ${{ github.workspace }}/firmware
-          HEX=$(find /tmp/ws -name "zephyr.hex" 2>/dev/null | head -1)
-          if [ -n "$HEX" ]; then
-            cp "$HEX" ${{ github.workspace }}/firmware.hex
-            echo "HEX COPIED from $HEX"
-          else
-            # Try .bin or .elf
-            ELF=$(find /tmp/ws -name "zephyr.elf" 2>/dev/null | head -1)
-            [ -n "$ELF" ] && cp "$ELF" ${{ github.workspace }}/firmware.elf && echo "ELF COPIED"
-          fi
+          cp build/zephyr/zephyr.hex ${{ github.workspace }}/firmware.hex
 
       - uses: actions/upload-artifact@v4
         with:
           name: zmk-esb-dongle-nrf52833
           path: ${{ github.workspace }}/firmware.hex
-          if-no-files-found: warn
+          if-no-files-found: error
           retention-days: 30
