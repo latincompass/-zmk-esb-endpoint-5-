@@ -1,8 +1,6 @@
 # SPDX-License-Identifier: MIT
 name: 🔌 Build Dongle
-on:
-  workflow_dispatch:
-  push: { branches: [main] }
+on: [workflow_dispatch, push]
 
 env:
   SDK_VER: 0.16.8
@@ -13,6 +11,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with: { path: repo }
+
       - run: sudo apt-get update -qq && sudo apt-get install -y -qq python3-pip cmake ninja-build device-tree-compiler wget xz-utils
       - run: pip3 install west -q
 
@@ -22,13 +21,18 @@ jobs:
           wget -q "https://github.com/zephyrproject-rtos/sdk-ng/releases/download/v${SDK_VER}/zephyr-sdk-${SDK_VER}_linux-x86_64_minimal.tar.xz"
           tar xf zephyr-sdk-${SDK_VER}_linux-x86_64_minimal.tar.xz && rm *.tar.xz
           cd zephyr-sdk-${SDK_VER} && ./setup.sh -t arm-zephyr-eabi -h
+          echo "/opt/zephyr-sdk-${SDK_VER}/sysroots/x86_64-pokysdk-linux/usr/bin/arm-zephyr-eabi" >> $GITHUB_PATH
 
       - name: Build
         run: |
           set -ex
+
+          # Create workspace
           WS=/tmp/ws
           rm -rf $WS && mkdir -p $WS && cd $WS
-          cat > west.yml << 'EOF'
+
+          # Build the west.yml manifest
+          cat > west.yml << 'WEOF'
           manifest:
             defaults: { remote: zephyr }
             remotes:
@@ -42,13 +46,37 @@ jobs:
                 revision: master
                 path: modules/hal/nordic
             self: { path: app }
-          EOF
-          west init -l . && west update --fetch=smart -o=--depth=1
-          rm -rf app && cp -r ${{ github.workspace }}/repo/dongle app
-          cd app && rm -rf build
-          west build -b nrf52833dk_nrf52833
-          ls -la build/zephyr/zephyr.hex
-          cp build/zephyr/zephyr.hex ${{ github.workspace }}/firmware.hex
+          WEOF
+
+          # Init and update
+          west init -l .
+          west update --fetch=smart -o=--depth=1
+
+          # Copy dongle source as app
+          rm -rf app
+          cp -r ${{ github.workspace }}/repo/dongle app
+
+          # Source zephyr-env.sh before building (CRITICAL!)
+          source /tmp/ws/zephyr/zephyr-env.sh
+
+          # Build
+          cd /tmp/ws/app
+          rm -rf build
+          west build -b nrf52833dk_nrf52833 -v 2>&1
+
+          # Show output
+          echo "=== Build Output ==="
+          find /tmp/ws/app/build -name "*.hex" -o -name "*.elf" 2>/dev/null || echo "No build output found"
+
+          # Copy firmware
+          mkdir -p ${{ github.workspace }}/firmware
+          if [ -f /tmp/ws/app/build/zephyr/zephyr.hex ]; then
+            cp /tmp/ws/app/build/zephyr/zephyr.hex ${{ github.workspace }}/firmware.hex
+            echo "SUCCESS: hex file created"
+          else
+            echo "FAIL: no hex file produced"
+            ls -la /tmp/ws/app/build/zephyr/ 2>/dev/null || echo "no build dir"
+          fi
 
       - uses: actions/upload-artifact@v4
         with:
