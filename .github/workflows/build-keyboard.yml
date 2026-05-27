@@ -1,17 +1,15 @@
 # SPDX-License-Identifier: MIT
 # Build: ZMK keyboard firmware with ESB module (.hex)
-# Uses manual git clone (no west update).
+# Uses west init + build with explicit modules.
 
 name: ⌨️ Build Keyboard
 
 on:
   workflow_dispatch:
-  push:
-    branches: [main]
+  push: { branches: [main] }
 
 env:
   SDK_VER: 0.16.8
-  ZEPHYR_VER: v3.7.0
 
 jobs:
   keyboard:
@@ -19,15 +17,15 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          path: module
+          path: repo
 
       - name: Install deps
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y -qq --no-install-recommends \
-            python3-pip cmake ninja-build device-tree-compiler wget xz-utils
+          sudo apt-get install -y -qq python3-pip cmake ninja-build device-tree-compiler wget xz-utils
+          pip3 install west -q
 
-      - name: Download Zephyr SDK
+      - name: SDK
         run: |
           cd /opt
           sudo wget -q "https://github.com/zephyrproject-rtos/sdk-ng/releases/download/v${SDK_VER}/zephyr-sdk-${SDK_VER}_linux-x86_64_minimal.tar.xz"
@@ -35,91 +33,75 @@ jobs:
           sudo rm zephyr-sdk-${SDK_VER}_linux-x86_64_minimal.tar.xz
           cd zephyr-sdk-${SDK_VER} && sudo ./setup.sh -t arm-zephyr-eabi -h
 
-      - name: Clone Zephyr
-        run: |
-          mkdir -p /opt/zmk-workspace/modules/hal
-          cd /opt/zmk-workspace
-          git clone --depth=1 --branch ${ZEPHYR_VER} \
-            https://github.com/zephyrproject-rtos/zephyr zephyr
-          git clone --depth=1 \
-            https://github.com/zephyrproject-rtos/hal_nordic \
-            modules/hal/nordic
-          git clone --depth=1 \
-            https://github.com/zephyrproject-rtos/cmsis \
-            modules/hal/cmsis
-
-      - name: Clone ZMK
-        run: |
-          cd /opt/zmk-workspace
-          git clone --depth=1 --branch main \
-            https://github.com/zmkfirmware/zmk zmk
-
-      - name: Create ZMK config with ESB module
-        run: |
-          mkdir -p /opt/zmk-workspace/config/boards
-          cat > /opt/zmk-workspace/config/nrf52833dk_nrf52833.conf << 'CONF'
-          CONFIG_ZMK_ESB_ENDPOINT=y
-          CONFIG_ZMK_ESB_BEHAVIOR_UNPAIR=y
-          CONFIG_ZMK_ESB_ENDPOINT_SHELL_CMDS=y
-          CONFIG_ZMK_ESB_ENDPOINT_CHANNEL_HOP=y
-          CONFIG_ZMK_ESB_ENDPOINT_COOP_HOP=y
-          CONF
-
-          cat > /opt/zmk-workspace/config/nrf52833dk_nrf52833.overlay << 'OVL'
-          / {
-              zmk_esb: zmk_esb_endpoint {
-                  compatible = "zmk,esb-endpoint";
-                  esb-channel = <78>;
-                  pairing-base-address = [17 f4 07 aa];
-                  pairing-prefix = <0x24>;
-                  data-base-address = [b9 8a 16 22];
-                  data-prefix = <0xc2>;
-              };
-              esb_ip: esb_input_processor {
-                  compatible = "zmk,esb-input-processor";
-                  #input-processor-cells = <0>;
-                  status = "okay";
-              };
-          };
-          &mkp_input_listener { input-processors = <&esb_ip>; };
-          &msc_input_listener { input-processors = <&esb_ip>; };
-          OVL
-
-          cat > /opt/zmk-workspace/config/nrf52833dk_nrf52833.keymap << 'KMP'
-          #include <behaviors.dtsi>
-          #include <dt-bindings/zmk/keys.h>
-          / {
-              keymap { compatible = "zmk,keymap";
-                  default_layer {
-                      bindings = <&kp A &kp B &kp C>;
-                  };
-              };
-          };
-          KMP
-
       - name: Build
         run: |
-          export ZEPHYR_BASE=/opt/zmk-workspace/zephyr
-          export ZEPHYR_MODULES="/opt/zmk-workspace/modules/hal/nordic;/opt/zmk-workspace/modules/hal/cmsis;/opt/zmk-workspace/zmk"
-          export ZEPHYR_SDK_INSTALL_DIR=/opt/zephyr-sdk-${SDK_VER}
+          mkdir -p /opt/ws
+          cd /opt/ws
 
-          source "$ZEPHYR_BASE/zephyr-env.sh"
+          # West manifest: zephyr + zmk + hal_nordic
+          cat > west.yml << 'MANIFEST'
+          manifest:
+            self: { path: config }
+            projects:
+              - name: zephyr
+                url: https://github.com/zephyrproject-rtos/zephyr
+                revision: v3.7.0
+                west-commands: scripts/west-commands.yml
+              - name: zmk
+                url: https://github.com/zmkfirmware/zmk
+                revision: main
+                path: zmk
+                west-commands: scripts/west-commands.yml
+              - name: hal_nordic
+                url: https://github.com/zephyrproject-rtos/hal_nordic
+                revision: master
+                path: modules/hal/nordic
+              - name: cmsis
+                url: https://github.com/zephyrproject-rtos/cmsis
+                revision: master
+                path: modules/hal/cmsis
+          MANIFEST
 
-          cd /opt/zmk-workspace/config
-          mkdir -p build
+          west init -l .
+          west update --fetch=smart -o=--depth=1 2>&1 | tail -20
 
-          # ZMK uses its own build system — point to the app dir
-          cd /opt/zmk-workspace/zmk/app
-          west build -b nrf52833dk_nrf52833 -d /opt/zmk-workspace/config/build \
-            -- \
-            -DZMK_CONFIG=/opt/zmk-workspace/config \
-            -DZMK_EXTRA_MODULES=${{ github.workspace }}/module \
-            -DZEPHYR_MODULES="$ZEPHYR_MODULES" \
-            -DZEPHYR_BASE="$ZEPHYR_BASE"
+          # Copy ESB module into workspace
+          mkdir -p modules/esb
+          cp -r ${{ github.workspace }}/repo/* modules/esb/
+
+          # Create config files
+          cat > config/nrf52833dk_nrf52833.conf << 'CONF'
+          CONFIG_ZMK_ESB_ENDPOINT=y
+          CONFIG_ZMK_ESB_BEHAVIOR_UNPAIR=y
+          CONF
+
+          cat > config/nrf52833dk_nrf52833.overlay << 'OVL'
+          / { zmk_esb: zmk_esb_endpoint { compatible = "zmk,esb-endpoint";
+              esb-channel = <78>;
+              pairing-base-address = [17 f4 07 aa];
+              pairing-prefix = <0x24>;
+              data-base-address = [b9 8a 16 22];
+              data-prefix = <0xc2>;
+          }; };
+          OVL
+
+          cat > config/nrf52833dk_nrf52833.keymap << 'KMP'
+          #include <behaviors.dtsi>
+          #include <dt-bindings/zmk/keys.h>
+          / { keymap { compatible = "zmk,keymap";
+              default_layer { bindings = <&kp A &kp B &kp C>; };
+          }; };
+          KMP
+
+          # Build: use zmk's app/west.yml
+          cd zmk/app
+          ZMK_MODULE_DIR=/opt/ws/modules/esb
+          west build -b nrf52833dk_nrf52833 -d /opt/ws/build \
+            -- -DZMK_CONFIG=/opt/ws/config \
+               -DZMK_EXTRA_MODULES="$ZMK_MODULE_DIR" 2>&1 | tail -30
 
           mkdir -p ${{ github.workspace }}/firmware
-          cp /opt/zmk-workspace/config/build/zephyr/zephyr.hex \
-             ${{ github.workspace }}/firmware/zmk-esb-keyboard-nrf52833.hex
+          cp /opt/ws/build/zephyr/zephyr.hex ${{ github.workspace }}/firmware/zmk-esb-keyboard-nrf52833.hex
 
       - name: Upload
         uses: actions/upload-artifact@v4
