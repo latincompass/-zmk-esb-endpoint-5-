@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: MIT
-# Build: nRF52833 ESB Dongle Firmware (.hex)
-# Uses west init + build with explicit modules (no import).
+# Build: nRF52833 ESB Dongle (.hex)
+# Minimal west manifest, only 3 projects.
 
 name: 🔌 Build Dongle
 
@@ -16,61 +16,40 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
-        with:
-          path: repo
+        with: { path: repo }
 
-      - name: Install deps
-        run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y -qq python3-pip cmake ninja-build device-tree-compiler wget xz-utils
-          pip3 install west -q
+      - run: sudo apt-get update -qq && sudo apt-get install -y -qq python3-pip cmake ninja-build device-tree-compiler wget xz-utils
+      - run: pip3 install west -q
 
       - name: SDK
         run: |
           cd /opt
           sudo wget -q "https://github.com/zephyrproject-rtos/sdk-ng/releases/download/v${SDK_VER}/zephyr-sdk-${SDK_VER}_linux-x86_64_minimal.tar.xz"
-          sudo tar xf zephyr-sdk-${SDK_VER}_linux-x86_64_minimal.tar.xz
-          sudo rm zephyr-sdk-${SDK_VER}_linux-x86_64_minimal.tar.xz
+          sudo tar xf zephyr-sdk-${SDK_VER}_linux-x86_64_minimal.tar.xz && sudo rm *.tar.xz
           cd zephyr-sdk-${SDK_VER} && sudo ./setup.sh -t arm-zephyr-eabi -h
 
       - name: Build
         run: |
-          mkdir -p /opt/ws
-          cd /opt/ws
-
-          # Minimal west manifest: just zephyr + hal_nordic
-          cat > west.yml << 'MANIFEST'
+          mkdir -p /opt/ws && cd /opt/ws
+          cat > west.yml << EOF
           manifest:
             self: { path: app }
             projects:
               - name: zephyr
                 url: https://github.com/zephyrproject-rtos/zephyr
                 revision: v3.7.0
-                west-commands: scripts/west-commands.yml
               - name: hal_nordic
                 url: https://github.com/zephyrproject-rtos/hal_nordic
                 revision: master
                 path: modules/hal/nordic
-              - name: cmsis
-                url: https://github.com/zephyrproject-rtos/cmsis
-                revision: master
-                path: modules/hal/cmsis
-          MANIFEST
-
-          west init -l .
-          west update --fetch=smart -o=--depth=1 2>&1 | tail -20
-
-          # Link the dongle source as the app
-          rm -rf app
-          ln -s ${{ github.workspace }}/repo/dongle app
-
-          west build -b nrf52833dk_nrf52833 -s app 2>&1 | tail -30
-
+          EOF
+          west init -l . && west update --fetch=smart -o=--depth=1
+          rm -rf app && ln -s ${{ github.workspace }}/repo/dongle app
+          west build -b nrf52833dk_nrf52833 -s app
           mkdir -p ${{ github.workspace }}/firmware
           cp build/zephyr/zephyr.hex ${{ github.workspace }}/firmware/zmk-esb-dongle-nrf52833.hex
 
-      - name: Upload
-        uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v4
         with:
           name: zmk-esb-dongle-nrf52833
           path: firmware/zmk-esb-dongle-nrf52833.hex
