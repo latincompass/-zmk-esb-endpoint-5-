@@ -46,19 +46,17 @@ static zmk_mod_flags_t implicit_mods;
  * cons_body keep evolving, so by the time the window ends only the
  * latest state remains and the host never observes the missed edges
  * (stranded modifiers, missing keystrokes). On overrun the oldest entry
- * is evicted via ring-buffer wrap so the queue still ends on the latest
- * state; final steady-state stays correct, only the truncated head of a
- * long burst is lost. Same trade-off the mouse path documents in
+ * is shifted out so the queue still ends on the latest state; final
+ * steady-state stays correct, only the truncated head of a long burst
+ * is lost. Same trade-off the mouse path documents in
  * input_processor_esb.c:71-82. */
 static struct zmk_hid_keyboard_report_body
     kb_pending[CONFIG_ZMK_ESB_ENDPOINT_HID_QUIET_KB_QUEUE_DEPTH];
-static uint8_t kb_pending_head;
-static uint8_t kb_pending_tail;
+static uint8_t kb_pending_count;
 
 static struct zmk_hid_consumer_report_body
     cons_pending[CONFIG_ZMK_ESB_ENDPOINT_HID_QUIET_CONS_QUEUE_DEPTH];
-static uint8_t cons_pending_head;
-static uint8_t cons_pending_tail;
+static uint8_t cons_pending_count;
 
 static struct k_work_delayable hid_retry_work;
 
@@ -165,36 +163,37 @@ static void send_cons_body(const struct zmk_hid_consumer_report_body *body) {
 }
 
 static void enqueue_pending_kb(void) {
-    const uint8_t next = (kb_pending_head + 1) % CONFIG_ZMK_ESB_ENDPOINT_HID_QUIET_KB_QUEUE_DEPTH;
-    if (next == kb_pending_tail) {
-        /* Ring full — evict oldest by advancing tail */
-        kb_pending_tail = (kb_pending_tail + 1) % CONFIG_ZMK_ESB_ENDPOINT_HID_QUIET_KB_QUEUE_DEPTH;
+    if (kb_pending_count >= CONFIG_ZMK_ESB_ENDPOINT_HID_QUIET_KB_QUEUE_DEPTH) {
+        memmove(&kb_pending[0], &kb_pending[1],
+                sizeof(kb_pending[0]) *
+                    (CONFIG_ZMK_ESB_ENDPOINT_HID_QUIET_KB_QUEUE_DEPTH - 1u));
+        kb_pending_count = CONFIG_ZMK_ESB_ENDPOINT_HID_QUIET_KB_QUEUE_DEPTH - 1u;
     }
-    kb_pending[kb_pending_head] = kb_body;
-    kb_pending_head = next;
+    kb_pending[kb_pending_count++] = kb_body;
 }
 
 static void enqueue_pending_cons(void) {
-    const uint8_t next = (cons_pending_head + 1) % CONFIG_ZMK_ESB_ENDPOINT_HID_QUIET_CONS_QUEUE_DEPTH;
-    if (next == cons_pending_tail) {
-        cons_pending_tail = (cons_pending_tail + 1) % CONFIG_ZMK_ESB_ENDPOINT_HID_QUIET_CONS_QUEUE_DEPTH;
+    if (cons_pending_count >= CONFIG_ZMK_ESB_ENDPOINT_HID_QUIET_CONS_QUEUE_DEPTH) {
+        memmove(&cons_pending[0], &cons_pending[1],
+                sizeof(cons_pending[0]) *
+                    (CONFIG_ZMK_ESB_ENDPOINT_HID_QUIET_CONS_QUEUE_DEPTH - 1u));
+        cons_pending_count = CONFIG_ZMK_ESB_ENDPOINT_HID_QUIET_CONS_QUEUE_DEPTH - 1u;
     }
-    cons_pending[cons_pending_head] = cons_body;
-    cons_pending_head = next;
+    cons_pending[cons_pending_count++] = cons_body;
 }
 
 static void drain_pending_kb(void) {
-    while (kb_pending_tail != kb_pending_head) {
-        send_kb_body(&kb_pending[kb_pending_tail]);
-        kb_pending_tail = (kb_pending_tail + 1) % CONFIG_ZMK_ESB_ENDPOINT_HID_QUIET_KB_QUEUE_DEPTH;
+    for (uint8_t i = 0; i < kb_pending_count; i++) {
+        send_kb_body(&kb_pending[i]);
     }
+    kb_pending_count = 0;
 }
 
 static void drain_pending_cons(void) {
-    while (cons_pending_tail != cons_pending_head) {
-        send_cons_body(&cons_pending[cons_pending_tail]);
-        cons_pending_tail = (cons_pending_tail + 1) % CONFIG_ZMK_ESB_ENDPOINT_HID_QUIET_CONS_QUEUE_DEPTH;
+    for (uint8_t i = 0; i < cons_pending_count; i++) {
+        send_cons_body(&cons_pending[i]);
     }
+    cons_pending_count = 0;
 }
 
 static void hid_retry_work_fn(struct k_work *work) {
@@ -255,10 +254,8 @@ static int hid_relay_cb(const zmk_event_t *eh) {
     static bool was_active;
     if (was_active && !active) {
         k_work_cancel_delayable(&hid_retry_work);
-        kb_pending_head = 0;
-        kb_pending_tail = 0;
-        cons_pending_head = 0;
-        cons_pending_tail = 0;
+        kb_pending_count = 0;
+        cons_pending_count = 0;
     }
     was_active = active;
 

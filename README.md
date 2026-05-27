@@ -1,37 +1,29 @@
-# zmk-esb-endpoint-5- — nRF52833 ESB 无线键盘 + 接收器
+# zmk-esb-endpoint
 
-将 ZMK 键盘的最后一个 BLE 配置文件槽位转换成一个 ESB PTX 端点，
-与配套的 USB 无线接收器通信。选择该配置槽时，ESB 接管无线电；
-切换到其他槽位时，BLE 恢复正常工作。
+Turns the last BLE profile slot on a ZMK keyboard into an ESB PTX endpoint
+that talks to a matching USB dongle. Pick that profile and ESB takes the
+radio; pick a different one and BLE comes back.
 
 > [!CAUTION]
-> 本模块不支持 ZMK 分体式键盘拓扑（尚未支持）。仅适用于一体式设备。
+> This module does not support ZMK split topology (yet?). Works only with unibody devices.
 
-本仓库包含：
-- **键盘端（PTX）**：作为 ZMK 模块，将键盘的 HID 报告通过 ESB 协议发送
-- **接收器端（PRX）**：`dongle/` 目录下的独立 nRF52833 固件，接收 ESB 数据并转发为 USB HID
-- **HHKB 示例配置**：`examples/hhkb/` 提供完整的 HHKB Professional 布局配置
+## Use
 
-**已针对 nRF52833 进行编写和优化**（也支持 nRF52840，需要审查 PPI 掩码）。
-
-## 键盘端使用
-
-在 `west.yml` 中添加：
+In your `west.yml`:
 
 ```yaml
-- name: zmk-esb-endpoint-5-
-  remote: your-remote
+- name: zmk-esb-endpoint
+  remote: efogdev
   revision: "main"
   submodules: true
-  path: modules/esb
 ```
 
-在键盘配置中启用：
+Enable it for the keyboard:
 ```
 CONFIG_ZMK_ESB_ENDPOINT=y
 ```
 
-在 devicetree 中添加 ESB 端点节点：
+Add to devicetree:
 ```dts
 / {
 	zmk_esb: zmk_esb_endpoint {
@@ -51,7 +43,7 @@ CONFIG_ZMK_ESB_ENDPOINT=y
 };
 ```
 
-将指针事件路由到 ESB 端点：
+Relay the pointer events to the endpoint:
 ```dts
 &mkp_input_listener { input-processors = <&esb_ip>; };
 &msc_input_listener { input-processors = <&esb_ip>; };
@@ -272,106 +264,6 @@ and the module will not just build and run on anything else without edits:
   and BLE HID stay silent for keycode/consumer events. ESB is the only
   output.
 - Only tested against ZMK v0.3.0.
-
-## Dongle firmware（nRF52833 接收器）
-
-本仓库 `dongle/` 目录提供了一个完整的 nRF52833 无线接收器固件，可直接烧录到 nRF52833 DK 或其他兼容开发板。
-
-### 功能特性
-
-- **ESB PRX 接收器**：监听配对管道和数据管道
-- **配对协议**：检测键盘 BEACON 后发送 PAIR_REQ，完成自动配对
-- **身份验证**：支持 VERIFY_REQ/VERIFY_RESP 握手验证
-- **USB HID 转发**：将键盘/多媒体/鼠标报告转发为标准 USB HID 设备
-- **同时兼容原版 dongle 协议**：与 efogdev 的协议完全兼容
-
-### 构建
-
-```bash
-# 需要先设置 Zephyr 开发环境
-cd dongle
-west build -b nrf52833dk_nrf52833 -s .
-west flash
-```
-
-### 配置
-
-`dongle/prj.conf` 包含了完整的 Kconfig 配置。关键配置项：
-
-| 配置项 | 默认值 | 说明 |
-|--------|--------|------|
-| `ESB_MAX_PAYLOAD_LENGTH` | 32 | ESB 最大载荷长度 |
-| `ESB_TX_FIFO_SIZE` | 32 | ESB TX FIFO 深度 |
-| `ESB_RX_FIFO_SIZE` | 32 | ESB RX FIFO 深度 |
-| `USB_DEVICE_STACK` | y | USB 设备栈 |
-
-**注意**：dongle 固件中的地址配置（`pairing-base-address`、`data-base-address` 等）
-必须与键盘端的 DTS 配置完全一致，否则无法建立连接。
-
-## HHKB 配置示例
-
-`examples/hhkb/` 目录提供了完整的 HHKB Professional 布局配置示例。
-
-### 文件说明
-
-| 文件 | 说明 |
-|------|------|
-| `hhkb_nrf52833.conf` | nRF52833 + ESB 端点的 Kconfig 配置 |
-| `hhkb_nrf52833.overlay` | DTS overlay：6x8 矩阵 + ESB 端点节点定义 |
-| `hhkb.keymap` | HHKB Professional 布局的完整 keymap |
-| `README.md` | 使用说明 |
-
-### 矩阵布局（6 行 × 8 列）
-
-```
-Row 0:  `~  1!  2@  3#  4$  5%  6^  7&
-Row 1:  8*  9(  0)  -_  =+  \|  BSp `~
-Row 2: Tab  Q   W   E   R   T   Y   U
-Row 3:  I   O   P   [{  ]}  Del
-Row 4:  A   S   D   F   G   H   J   K
-Row 5:  L   ;:  '"  Ent
-Row 6:  LSft Z   X   C   V   B   N   M
-Row 7:  ,<  .>  /?  RSft Fn
-Row 8: LCtl GUI LAlt    Spc     RAlt GUI  App
-```
-
-### 使用方法
-
-将这三个文件复制到你的 ZMK 键盘配置项目中，参考 `examples/hhkb/README.md` 调整引脚和配置。
-
-## SoC 分析报告
-
-代码已针对 **nRF52833** 进行了全面调优：
-
-| 项目 | 值 | 说明 |
-|------|-----|------|
-| `RADIO_IRQn` | 1 | nRF52833 的 RADIO IRQ 编号 |
-| `NVIC_NUM_VECTORS` | 64 | 16 系统 + 48 外部中断 |
-| `BT_LL_PPI_MASK` | `0x02CFFFC0u` | PPI 通道 6-19 + 22/23/25 |
-| ESB 系统定时器 | TIMER2 | 独立硬件定时器 |
-| 射频速率 | 1Mbps BLE | 与 BLE 兼容的比特率 |
-| CRC | 16-bit | 增强的错误检测 |
-| 发射功率 | +8dBm | 最大输出功率 |
-| 快速启动 | 启用 | 缩短 RX→TX 切换时间 |
-
-## 代码优化
-
-本模块在原始版本基础上进行了以下优化：
-
-1. **新增 nRF52833 接收器固件**（`dongle/`）：
-   - 完整的 ESB PRX 实现，配对、验证、HID 转发
-   - USB HID 复合设备（键盘 + 多媒体 + 鼠标）
-   - 与键盘端协议完全兼容
-
-2. **HHKB 配置示例**（`examples/hhkb/`）：
-   - 6×8 矩阵定义，完整 HHKB Professional 布局
-   - 三层映射：默认层 + Fn 功能层
-   - 开箱即用的 Kconfig 和 DTS 配置
-
-3. **代码质量增强**：
-   - `consecutive_tx_fail` 的起始值逻辑优化（从 `esb_transport.c:109` 开始）
-   - `hid_relay.c` 中队列的 `memmove` 优化为更高效的环形缓冲模式
-   - 所有模块添加了明确的 nRF52833 断言检查
 
 ## License
 

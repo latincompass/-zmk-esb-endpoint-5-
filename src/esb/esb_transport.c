@@ -32,17 +32,6 @@ LOG_MODULE_REGISTER(zmk_esb_transport, CONFIG_ZMK_ESB_ENDPOINT_LOG_LEVEL);
 /* nRF52833: RADIO_IRQn = 1 */
 #define RADIO_IRQn 1
 
-/* Compile-time SoC guard — this module is tuned for nRF52833.
- * NVIC_NUM_VECTORS = 64 (16 system + 48 external) is exact for 52833;
- * 52840 has 64 too but the PPI mask differs. If building for a different
- * nRF52 variant, review the BT_LL_PPI_MASK below and update this guard. */
-#if defined(CONFIG_SOC_NRF52833)
-BUILD_ASSERT(NVIC_NUM_VECTORS == 64,
-             "nRF52833 requires 64 NVIC vectors (16 system + 48 external)");
-#else
-#warning "This module is written and tuned for nRF52833. Other SoCs may need edits."
-#endif
-
 /*
  * BT_LL_SW_SPLIT runs a TIMER0-driven scheduler with radio events wired via
  * PPI.  Even when no adv/scan/conn role is active, stray TIMER0 CC events
