@@ -1,4 +1,24 @@
 # SPDX-License-Identifier: MIT
-# Minimal manifest — don't import zephyr's entire dep tree.
-# The build workflow clones deps manually (see build-dongle.yml).
-manifest: {}
+# Zephyr manifest for ESB dongle
+
+manifest:
+  remotes:
+    - name: zephyrproject-rtos
+      url-base: https://github.com/zephyrproject-rtos
+  projects:
+    - name: zephyr
+      remote: zephyrproject-rtos
+      revision: main
+      import:
+        name-allowlist:
+          - cmsis
+          - hal_nordic
+          - kconfiglib
+          - libmetal
+          - mbedtls
+          - tinycrypt
+          - zcbor
+          - zephyr
+          - zlib
+  self:
+    path: .
