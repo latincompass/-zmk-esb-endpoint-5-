@@ -1,8 +1,54 @@
-name: Dongle
+name: Build Dongle
 on: push
+
+env:
+  SDK_VER: 0.16.8
+
 jobs:
   build:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
-      - run: echo "test ok"
+
+      - run: sudo apt-get update -qq
+      - run: sudo apt-get install -y -qq python3-pip cmake ninja-build wget xz-utils
+      - run: pip3 install west -q
+
+      - name: SDK
+        run: |
+          cd /opt
+          wget -q "https://github.com/zephyrproject-rtos/sdk-ng/releases/download/v${SDK_VER}/zephyr-sdk-${SDK_VER}_linux-x86_64_minimal.tar.xz"
+          tar xf zephyr-sdk-${SDK_VER}_linux-x86_64_minimal.tar.xz && rm *.tar.xz
+          cd zephyr-sdk-${SDK_VER} && ./setup.sh -t arm-zephyr-eabi -h
+
+      - name: Build
+        run: |
+          set -ex
+          mkdir -p /tmp/ws && cd /tmp/ws
+          cat > west.yml << 'WEOF'
+manifest:
+  defaults: { remote: zephyr }
+  remotes:
+    - name: zephyr
+      url-base: https://github.com/zephyrproject-rtos
+  projects:
+    - name: zephyr
+      revision: v3.7.0
+      west-commands: scripts/west-commands.yml
+    - name: hal_nordic
+      revision: master
+      path: modules/hal/nordic
+  self: { path: dongle }
+WEOF
+          west init -l .
+          west update --fetch=smart -o=--depth=1
+          rm -rf dongle && cp -r ${{ github.workspace }}/dongle dongle
+          cd dongle && west build -b nrf52833dk_nrf52833
+          ls -la build/zephyr/zephyr.hex
+          cp build/zephyr/zephyr.hex ${{ github.workspace }}/firmware.hex
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: zmk-esb-dongle
+          path: ${{ github.workspace }}/firmware.hex
+          if-no-files-found: error
