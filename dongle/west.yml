@@ -1,12 +1,4 @@
 # SPDX-License-Identifier: MIT
-manifest:
-  self:
-    path: app
-  remotes:
-    - name: zephyrproject
-      url-base: https://github.com/zephyrproject-rtos
-  projects:
-    - name: zephyr
-      remote: zephyrproject
-      revision: v3.7.0
-      import: true
+# Minimal manifest — don't import zephyr's entire dep tree.
+# The build workflow clones deps manually (see build-dongle.yml).
+manifest: {}
