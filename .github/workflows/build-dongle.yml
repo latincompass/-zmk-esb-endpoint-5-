@@ -62,13 +62,27 @@ jobs:
             ninja -C build 2>&1 | tail -50
           }
 
-          # Show output
-          echo "=== Build output ==="
-          find . -name "*.hex" -o -name "*.elf" 2>/dev/null || echo "No hex/elf found"
-          ls -la build/zephyr/ 2>/dev/null || true
+          # Show ALL output files
+          echo "=== ALL BUILD OUTPUT FILES ==="
+          find /tmp/ws/app -name "*.hex" -o -name "*.bin" -o -name "*.elf" -o -name "*.uf2" 2>/dev/null
+          echo "=== Build/zephyr directory ==="
+          ls -la /tmp/ws/app/build/zephyr/ 2>/dev/null || echo "No build/zephyr dir"
+          echo "=== All build dirs ==="
+          find /tmp/ws/app -type d -name "build*" 2>/dev/null
+          echo "=== Searching anywhere for hex ==="
+          find /tmp/ws -name "zephyr.hex" 2>/dev/null || echo "NO HEX FOUND ANYWHERE"
 
+          # Copy firmware
           mkdir -p ${{ github.workspace }}/firmware
-          find . -name "zephyr.hex" -exec cp {} ${{ github.workspace }}/firmware.hex \; 2>/dev/null || true
+          HEX=$(find /tmp/ws -name "zephyr.hex" 2>/dev/null | head -1)
+          if [ -n "$HEX" ]; then
+            cp "$HEX" ${{ github.workspace }}/firmware.hex
+            echo "HEX COPIED from $HEX"
+          else
+            # Try .bin or .elf
+            ELF=$(find /tmp/ws -name "zephyr.elf" 2>/dev/null | head -1)
+            [ -n "$ELF" ] && cp "$ELF" ${{ github.workspace }}/firmware.elf && echo "ELF COPIED"
+          fi
 
       - uses: actions/upload-artifact@v4
         with:

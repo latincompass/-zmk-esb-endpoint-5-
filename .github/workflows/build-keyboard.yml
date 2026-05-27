@@ -2,20 +2,30 @@
 name: ⌨️ Build Keyboard
 on: [workflow_dispatch, push]
 
+env:
+  SDK_VER: 0.16.8
+
 jobs:
   keyboard:
     runs-on: ubuntu-24.04
-    container:
-      image: ghcr.io/zmkfirmware/zmk-build-arm:stable
     steps:
       - uses: actions/checkout@v4
         with: { path: repo }
+      - run: sudo apt-get update -qq && sudo apt-get install -y -qq python3-pip cmake ninja-build device-tree-compiler wget xz-utils
+      - run: pip3 install west -q
+
+      - name: SDK
+        run: |
+          cd /opt
+          wget -q "https://github.com/zephyrproject-rtos/sdk-ng/releases/download/v${SDK_VER}/zephyr-sdk-${SDK_VER}_linux-x86_64_minimal.tar.xz"
+          tar xf zephyr-sdk-${SDK_VER}_linux-x86_64_minimal.tar.xz && rm *.tar.xz
+          cd zephyr-sdk-${SDK_VER} && ./setup.sh -t arm-zephyr-eabi -h
 
       - name: Build
         run: |
           set -ex
-          WS=/tmp/ws
-          rm -rf $WS && mkdir -p $WS && cd $WS
+          WS=/tmp/ws; rm -rf $WS; mkdir -p $WS; cd $WS
+
           cat > west.yml << 'EOF'
           manifest:
             defaults: { remote: zmkfirmware }
@@ -37,16 +47,24 @@ jobs:
                 path: modules/hal/nordic
             self: { path: config }
           EOF
-          west init -l .
-          west update --fetch=smart -o=--depth=1
+          west init -l . && west update --fetch=smart -o=--depth=1
+
           mkdir -p modules/esb-ep && cp -r ${{ github.workspace }}/repo/* modules/esb-ep/
           echo "CONFIG_ZMK_ESB_ENDPOINT=y" > config/nrf52833dk_nrf52833.conf
+
           cd zmk/app && rm -rf /tmp/ws/build
           west build -b nrf52833dk_nrf52833 -d /tmp/ws/build \
             -- -DZMK_CONFIG=/tmp/ws/config -DZMK_EXTRA_MODULES=/tmp/ws/modules/esb-ep
+
+          # Find firmware
+          echo "=== Searching for firmware ==="
+          find /tmp/ws/build -name "*.hex" -o -name "*.uf2" -o -name "*.bin" -o -name "*.elf" 2>/dev/null
+          ls -la /tmp/ws/build/zephyr/ 2>/dev/null || true
+
           mkdir -p ${{ github.workspace }}/firmware
-          cp /tmp/ws/build/zephyr/zephyr.hex ${{ github.workspace }}/firmware.hex 2>/dev/null || true
-          cp /tmp/ws/build/zephyr/zmk.uf2 ${{ github.workspace }}/firmware.uf2 2>/dev/null || true
+          for ext in hex uf2 bin elf; do
+            find /tmp/ws/build -name "zephyr.$ext" -exec cp {} ${{ github.workspace }}/firmware.$ext \; 2>/dev/null || true
+          done
 
       - uses: actions/upload-artifact@v4
         with:
