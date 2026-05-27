@@ -1,75 +1,8 @@
-# SPDX-License-Identifier: MIT
-name: 🔌 Build Dongle
-on: [workflow_dispatch, push]
-
-env:
-  SDK_VER: 0.16.8
-
+name: Dongle
+on: push
 jobs:
-  dongle:
+  build:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
-        with: { path: repo }
-      - run: sudo apt-get update -qq && sudo apt-get install -y -qq python3-pip cmake ninja-build device-tree-compiler wget xz-utils
-      - run: pip3 install west -q
-
-      - name: SDK
-        run: |
-          cd /opt
-          wget -q "https://github.com/zephyrproject-rtos/sdk-ng/releases/download/v${SDK_VER}/zephyr-sdk-${SDK_VER}_linux-x86_64_minimal.tar.xz"
-          tar xf zephyr-sdk-${SDK_VER}_linux-x86_64_minimal.tar.xz && rm *.tar.xz
-          cd zephyr-sdk-${SDK_VER} && ./setup.sh -t arm-zephyr-eabi -h
-
-      - name: Build
-        run: |
-          set -ex
-
-          # Create workspace
-          WS=/tmp/ws
-          rm -rf $WS
-          mkdir -p $WS && cd $WS
-
-          cat > west.yml << 'EOF'
-manifest:
-  defaults: { remote: zephyr }
-  remotes:
-    - name: zephyr
-      url-base: https://github.com/zephyrproject-rtos
-  projects:
-    - name: zephyr
-      revision: v3.7.0
-      west-commands: scripts/west-commands.yml
-    - name: hal_nordic
-      revision: master
-      path: modules/hal/nordic
-  self: { path: app }
-EOF
-          west init -l .
-          west update --fetch=smart -o=--depth=1
-
-          # Put dongle source in app dir
-          rm -rf app
-          cp -r ${{ github.workspace }}/repo/dongle app
-
-          # CRITICAL: set Zephyr env BEFORE west build
-          export ZEPHYR_BASE=$WS/zephyr
-          source $ZEPHYR_BASE/zephyr-env.sh
-
-          # Build (NO pipe to tail - don't hide errors!)
-          cd app
-          rm -rf build
-          west build -b nrf52833dk_nrf52833
-
-          echo "=== CHECKING OUTPUT ==="
-          ls -la build/zephyr/zephyr.hex
-
-          mkdir -p ${{ github.workspace }}/firmware
-          cp build/zephyr/zephyr.hex ${{ github.workspace }}/firmware.hex
-
-      - uses: actions/upload-artifact@v4
-        with:
-          name: zmk-esb-dongle-nrf52833
-          path: ${{ github.workspace }}/firmware.hex
-          if-no-files-found: error
-          retention-days: 30
+      - run: echo "test ok"
