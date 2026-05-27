@@ -1,4 +1,4 @@
-name: Build Dongle
+name: Dongle
 on: push
 
 env:
@@ -42,8 +42,11 @@ manifest:
 WEOF
           west init -l .
           west update --fetch=smart -o=--depth=1
-          rm -rf dongle && cp -r ${{ github.workspace }}/dongle dongle
-          cd dongle && west build -b nrf52833dk_nrf52833
+          rm -rf dongle
+          cp -r ${{ github.workspace }}/dongle dongle
+          cd dongle
+          rm -rf build
+          west build -b nrf52833dk_nrf52833
           ls -la build/zephyr/zephyr.hex
           cp build/zephyr/zephyr.hex ${{ github.workspace }}/firmware.hex
 
