@@ -44,7 +44,7 @@ jobs:
           export PATH=~/.local/bin:$PATH
           python3.10 -m west init -l .
           python3.10 -m west update --narrow -o=--depth=1
-          python3.10 -m west build -b nrf52833dk/nrf52833 -p auto .
+          python3.10 -m west build -b nrf52833dk_nrf52833 -p auto .
 
       - name: Check built files
         run: ls -la dongle/build/zephyr/
@@ -119,7 +119,7 @@ jobs:
           export PATH=~/.local/bin:$PATH
           python3.10 -m west init -l .
           python3.10 -m west update --narrow -o=--depth=1
-          python3.10 -m west build -b nrf52833dk/nrf52833 -p auto zmk/app -- -DZMK_CONFIG=${PWD}/config
+          python3.10 -m west build -b nrf52833dk_nrf52833 -p auto zmk/app -- -DZMK_CONFIG=${PWD}/config
 
       - name: Check built files
         run: ls -la zmk-config/build/zephyr/
