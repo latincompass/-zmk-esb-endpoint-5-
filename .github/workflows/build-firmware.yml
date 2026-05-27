@@ -9,21 +9,35 @@ on:
 
 jobs:
   build-dongle:
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-22.04
     name: Build ESB Dongle
     steps:
       - uses: actions/checkout@v4
         with:
           submodules: recursive
 
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            git cmake ninja-build gperf ccache dfu-util device-tree-compiler \
+            wget python3-dev python3-pip python3-setuptools python3-wheel \
+            xz-utils file make gcc gcc-multilib g++-multilib libsdl2-dev
+
+      - name: Install Python packages
+        run: |
+          pip3 install --user west pyelftools
+
       - name: Install Zephyr SDK
-        uses: zephyrproject-rtos/action-zephyr-sdk@v12
-        with:
-          sdk-version: '0.16.4'
+        run: |
+          wget https://github.com/zephyrproject-rtos/sdk-ng/releases/download/v0.16.4/zephyr-sdk-0.16.4_linux-x86_64.tar.xz
+          tar xvf zephyr-sdk-0.16.4_linux-x86_64.tar.xz
+          sudo ./zephyr-sdk-0.16.4/setup.sh -t all -h -c
 
       - name: Build dongle firmware
         working-directory: dongle
         run: |
+          export PATH=~/.local/bin:$PATH
           west init -l .
           west update --narrow -o=--depth=1
           west build -b nrf52833dk_nrf52833 -p auto .
@@ -40,7 +54,7 @@ jobs:
             dongle/build/zephyr/zephyr.bin
 
   build-keyboard:
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-22.04
     name: Build Keyboard
     steps:
       - uses: actions/checkout@v4
@@ -48,10 +62,23 @@ jobs:
           submodules: recursive
           path: zmk-esb-endpoint
 
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            git cmake ninja-build gperf ccache dfu-util device-tree-compiler \
+            wget python3-dev python3-pip python3-setuptools python3-wheel \
+            xz-utils file make gcc gcc-multilib g++-multilib libsdl2-dev
+
+      - name: Install Python packages
+        run: |
+          pip3 install --user west pyelftools
+
       - name: Install Zephyr SDK
-        uses: zephyrproject-rtos/action-zephyr-sdk@v12
-        with:
-          sdk-version: '0.16.4'
+        run: |
+          wget https://github.com/zephyrproject-rtos/sdk-ng/releases/download/v0.16.4/zephyr-sdk-0.16.4_linux-x86_64.tar.xz
+          tar xvf zephyr-sdk-0.16.4_linux-x86_64.tar.xz
+          sudo ./zephyr-sdk-0.16.4/setup.sh -t all -h -c
 
       - name: Setup ZMK workspace
         run: |
@@ -81,6 +108,7 @@ jobs:
       - name: Build keyboard firmware
         working-directory: zmk-config
         run: |
+          export PATH=~/.local/bin:$PATH
           west init -l .
           west update --narrow -o=--depth=1
           west build -b nrf52833dk_nrf52833 -p auto zmk/app -- -DZMK_CONFIG=${PWD}/config
